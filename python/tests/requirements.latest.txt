@@ -1,0 +1,6 @@
+opentelemetry-api
+opentelemetry-sdk
+opentelemetry-distro
+opentelemetry-test-utils
+pytest==9.2.0
+packaging==26.3

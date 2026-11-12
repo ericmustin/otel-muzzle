@@ -1,0 +1,14 @@
+# otel-muzzle turned off with each language's own switch: the same apps under the same zero-code agents, for a
+# comparison. Use on top of the zero-code override:
+#   docker compose -f docker-compose.yml -f examples/compose/zerocode.yml -f examples/compose/muzzle-off.yml up -d
+services:
+  ruby-app:
+    environment:
+      OTEL_RUBY_INSTRUMENTATION_MUZZLE_ENABLED: "false"
+  js-app:
+    environment:
+      # The stock zero-code entry point in place of instrumentation.js (see examples/js-app/start.sh).
+      ZEROCODE_REGISTER: "@opentelemetry/auto-instrumentations-node/register"
+  python-app:
+    environment:
+      OTEL_PYTHON_DISABLED_INSTRUMENTATIONS: muzzle

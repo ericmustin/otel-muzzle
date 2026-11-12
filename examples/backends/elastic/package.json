@@ -1,0 +1,12 @@
+{
+  "name": "otel-muzzle-elastic-demo",
+  "private": true,
+  "description": "Captures the Kibana screenshots for examples/backends/elastic (capture.mjs). Uses the installed Google Chrome.",
+  "type": "module",
+  "scripts": {
+    "capture": "node capture.mjs"
+  },
+  "devDependencies": {
+    "playwright": "1.55.0"
+  }
+}

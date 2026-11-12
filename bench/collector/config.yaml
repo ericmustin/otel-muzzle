@@ -1,0 +1,34 @@
+# Measurement collector for the otel-muzzle benchmark.
+# Traces go to a file with NO batching, so every record in the file is exactly one export request
+# from one SDK, re-encoded as OTLP protobuf. Those record sizes are the "bytes ingested".
+# Metrics and logs from the demo services are accepted and discarded.
+receivers:
+  otlp:
+    protocols:
+      grpc:
+        endpoint: 0.0.0.0:4317
+      http:
+        endpoint: 0.0.0.0:4318
+
+exporters:
+  file/traces:
+    path: /out/${env:BENCH_VARIANT}/${env:BENCH_PHASE}.pb
+    format: proto
+  nop: {}
+
+service:
+  telemetry:
+    logs:
+      level: warn
+    metrics:
+      level: none
+  pipelines:
+    traces:
+      receivers: [otlp]
+      exporters: [file/traces]
+    metrics:
+      receivers: [otlp]
+      exporters: [nop]
+    logs:
+      receivers: [otlp]
+      exporters: [nop]

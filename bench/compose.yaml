@@ -1,0 +1,139 @@
+# otel-muzzle benchmark stack: three OpenTelemetry Demo 3.1.0 services, one per language otel-muzzle
+# supports, plus what they need to answer requests.
+# run.sh drives it; nothing here publishes a host port.
+#
+#   email           Ruby    HTTP  POST /send_order_confirmation
+#   payment         Node.js gRPC  oteldemo.PaymentService/Charge
+#   recommendation  Python  gRPC  oteldemo.RecommendationService/ListRecommendations
+#   product-catalog Go      gRPC  called by recommendation; never gets otel-muzzle (control)
+#
+# *_IMAGE selects the stock demo image (baseline) or the same image plus otel-muzzle.
+name: muzzle-bench
+
+x-demo-env: &demo-env
+  FLAGD_HOST: flagd
+  FLAGD_PORT: "8013"
+  OTEL_RESOURCE_ATTRIBUTES: service.namespace=opentelemetry-demo,service.version=3.1.0
+  OTEL_EXPORTER_OTLP_METRICS_TEMPORALITY_PREFERENCE: cumulative
+  # Read by the otel-muzzle images only; the stock images ignore it.
+  OTEL_MUZZLE_VERBOSE_RATIO: ${OTEL_MUZZLE_VERBOSE_RATIO:-0}
+
+services:
+  otel-collector:
+    image: otel/opentelemetry-collector-contrib:0.158.0
+    user: "${BENCH_UID:-10001}:${BENCH_GID:-10001}"
+    command:
+      - --config=/etc/otelcol/config.yaml
+      - --config=/etc/otelcol/${COLLECTOR_OVERLAY:-local-only}.yaml
+    environment:
+      BENCH_VARIANT: ${BENCH_VARIANT:-adhoc}
+      BENCH_PHASE: ${BENCH_PHASE:-measure}
+      OTLP_FORWARD_ENDPOINT: ${OTLP_FORWARD_ENDPOINT:-}
+      OTLP_FORWARD_AUTHORIZATION: ${OTLP_FORWARD_AUTHORIZATION:-}
+    volumes:
+      - ./collector:/etc/otelcol:ro
+      - ${BENCH_OUT:-./out}:/out
+
+  flagd:
+    image: ghcr.io/open-feature/flagd:v0.16.0
+    command: ["start", "--uri", "file:./etc/flagd/demo.flagd.json"]
+    volumes:
+      - ./vendor/opentelemetry-demo-3.1.0/demo.flagd.json:/etc/flagd/demo.flagd.json:ro
+
+  astronomy-db:
+    image: postgres:18.4
+    command: postgres -c shared_preload_libraries=pg_stat_statements
+    environment:
+      POSTGRES_PASSWORD: changeit
+    volumes:
+      - ./vendor/opentelemetry-demo-3.1.0/init.sql:/docker-entrypoint-initdb.d/init.sql:ro
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready"]
+      interval: 2s
+      timeout: 3s
+      retries: 30
+
+  product-catalog:
+    image: ghcr.io/open-telemetry/demo:3.1.0-product-catalog
+    environment:
+      <<: *demo-env
+      PRODUCT_CATALOG_PORT: "3550"
+      GOMEMLIMIT: 16MiB
+      OTEL_EXPORTER_OTLP_ENDPOINT: http://otel-collector:4317
+      OTEL_SERVICE_NAME: product-catalog
+      OTEL_CONFIG_FILE: /otel-config.yml
+      OTEL_SEMCONV_STABILITY_OPT_IN: database
+      DB_CONNECTION_STRING: postgres://astronomy_user:astronomy_password@astronomy-db/astronomy_db?sslmode=disable
+    volumes:
+      - ./vendor/opentelemetry-demo-3.1.0/otel-config.yml:/otel-config.yml:ro
+    depends_on:
+      astronomy-db: { condition: service_healthy }
+      flagd: { condition: service_started }
+
+  email:
+    image: ${EMAIL_IMAGE:-ghcr.io/open-telemetry/demo:3.1.0-email}
+    environment:
+      <<: *demo-env
+      APP_ENV: production
+      EMAIL_PORT: "6060"
+      OTEL_EXPORTER_OTLP_ENDPOINT: http://otel-collector:4318
+      OTEL_SERVICE_NAME: email
+    healthcheck:
+      test: ["CMD", "ruby", "-e", "require 'socket'; TCPSocket.new('localhost', 6060).close"]
+      interval: 2s
+      timeout: 3s
+      retries: 60
+    depends_on:
+      flagd: { condition: service_started }
+
+  payment:
+    image: ${PAYMENT_IMAGE:-ghcr.io/open-telemetry/demo:3.1.0-payment}
+    environment:
+      <<: *demo-env
+      PAYMENT_PORT: "50051"
+      OTEL_EXPORTER_OTLP_ENDPOINT: http://otel-collector:4317
+      OTEL_EXPORTER_OTLP_PROTOCOL: grpc
+      OTEL_SERVICE_NAME: payment
+    healthcheck:
+      test:
+        - CMD
+        - /nodejs/bin/node
+        - -e
+        - "const s=require('net').connect(50051,'127.0.0.1',()=>{s.destroy();process.exit(0)});s.on('error',()=>process.exit(1))"
+      interval: 2s
+      timeout: 3s
+      retries: 60
+    depends_on:
+      flagd: { condition: service_started }
+
+  recommendation:
+    image: ${RECOMMENDATION_IMAGE:-ghcr.io/open-telemetry/demo:3.1.0-recommendation}
+    environment:
+      <<: *demo-env
+      RECOMMENDATION_PORT: "9001"
+      PRODUCT_CATALOG_ADDR: product-catalog:3550
+      OTEL_EXPORTER_OTLP_ENDPOINT: http://otel-collector:4317
+      OTEL_SERVICE_NAME: recommendation
+      OTEL_PYTHON_LOG_CORRELATION: "true"
+      PROTOCOL_BUFFERS_PYTHON_IMPLEMENTATION: python
+    healthcheck:
+      test: ["CMD-SHELL", "nc -z localhost 9001"]
+      interval: 2s
+      timeout: 3s
+      retries: 60
+    depends_on:
+      product-catalog: { condition: service_started }
+      flagd: { condition: service_started }
+
+  # Load generator: started only by run.sh (`docker compose run k6 ...`).
+  k6:
+    image: grafana/k6:2.3.0
+    profiles: ["load"]
+    user: "${BENCH_UID:-10001}:${BENCH_GID:-10001}"
+    working_dir: /bench
+    environment:
+      K6_NO_USAGE_REPORT: "true"   # k6 otherwise reports each run to Grafana
+    volumes:
+      - ./load:/bench/load:ro
+      - ./vendor/opentelemetry-demo-3.1.0/demo.proto:/bench/proto/demo.proto:ro
+      - ${BENCH_OUT:-./out}:/out

@@ -1,0 +1,21 @@
+# Merged on top of config.yaml by examples/backends/elastic/compose.yml: a second traces pipeline that forwards the same
+# spans to Elastic's OTLP endpoint, with deployment.environment.name set to $ELASTIC_ENVIRONMENT.
+processors:
+  resource/elastic:
+    attributes:
+      - key: deployment.environment.name
+        value: ${env:ELASTIC_ENVIRONMENT}
+        action: upsert
+
+exporters:
+  otlp_http/elastic:
+    endpoint: ${env:ELASTIC_OTLP_ENDPOINT}
+    headers:
+      Authorization: "ApiKey ${env:ELASTIC_API_KEY}"
+
+service:
+  pipelines:
+    traces/elastic:
+      receivers: [otlp]
+      processors: [resource/elastic, batch]
+      exporters: [otlp_http/elastic]

@@ -1,0 +1,93 @@
+[build-system]
+requires = ["hatchling>=1.27"]
+build-backend = "hatchling.build"
+
+[project]
+name = "otel-muzzle"
+dynamic = ["version"]
+description = "Drops INTERNAL spans from OpenTelemetry Python traces and keeps every trace connected."
+readme = "README.md"
+license = "Apache-2.0"
+license-files = ["LICENSE"]
+requires-python = ">=3.10"
+authors = [{ name = "Eric Mustin" }]
+keywords = ["opentelemetry", "tracing", "sampler", "spans", "observability"]
+classifiers = [
+    "Development Status :: 3 - Alpha",
+    "Intended Audience :: Developers",
+    "Operating System :: OS Independent",
+    "Programming Language :: Python :: 3",
+    "Programming Language :: Python :: 3 :: Only",
+    "Programming Language :: Python :: 3.10",
+    "Programming Language :: Python :: 3.11",
+    "Programming Language :: Python :: 3.12",
+    "Programming Language :: Python :: 3.13",
+    "Programming Language :: Python :: 3.14",
+    "Topic :: System :: Monitoring",
+    "Typing :: Typed",
+]
+dependencies = [
+    "opentelemetry-api>=1.30,<2",
+    "opentelemetry-sdk>=1.30,<2",
+]
+
+[project.optional-dependencies]
+# Mirrors otel_muzzle.package._instruments; opentelemetry-instrument checks it.
+instruments = ["opentelemetry-sdk >= 1.30, < 2"]
+
+[project.urls]
+Homepage = "https://github.com/ericmustin/otel-muzzle/tree/main/python"
+Repository = "https://github.com/ericmustin/otel-muzzle"
+Changelog = "https://github.com/ericmustin/otel-muzzle/blob/main/python/CHANGELOG.md"
+Issues = "https://github.com/ericmustin/otel-muzzle/issues"
+
+[project.entry-points.opentelemetry_instrumentor]
+muzzle = "otel_muzzle.instrumentor:MuzzleInstrumentor"
+
+[tool.hatch.version]
+path = "src/otel_muzzle/version.py"
+
+[tool.hatch.build.targets.wheel]
+packages = ["src/otel_muzzle"]
+
+# The tests stay out: they read ../testdata/, outside this directory.
+[tool.hatch.build.targets.sdist]
+include = ["/src", "/CHANGELOG.md"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+addopts = ["-ra", "--strict-markers"]
+filterwarnings = [
+    "error",
+    # opentelemetry-api < 1.39 calls asyncio.iscoroutinefunction, deprecated in Python 3.14.
+    "ignore:'asyncio.iscoroutinefunction' is deprecated:DeprecationWarning:opentelemetry.util._decorator",
+]
+
+[tool.ruff]
+line-length = 120
+target-version = "py310"
+src = ["src", "tests"]
+output-format = "concise"
+
+[tool.ruff.lint]
+select = ["E", "W", "F", "I", "PLC", "PLE", "Q", "A", "TID"]
+
+[tool.ruff.lint.per-file-ignores]
+"tests/**" = ["PLC0415"] # tests import inside functions to control when the package loads
+
+[tool.ruff.format]
+docstring-code-format = true
+
+[tool.mypy]
+strict = true
+files = ["src", "tests"]
+python_version = "3.10"
+
+# instrumentation's instrumentor.py starts with a file-level `# type: ignore`, so BaseInstrumentor is Any.
+[[tool.mypy.overrides]]
+module = "opentelemetry.instrumentation.*"
+follow_imports = "skip"
+
+[[tool.mypy.overrides]]
+module = "otel_muzzle.instrumentor"
+disallow_subclassing_any = false

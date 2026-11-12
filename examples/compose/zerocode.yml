@@ -1,0 +1,28 @@
+# Zero-code mode: no OpenTelemetry setup in the apps. Use on top of docker-compose.yml:
+#   docker compose -f docker-compose.yml -f examples/compose/zerocode.yml run --rm --build verifier
+# or make e2e MODE=zerocode. examples/README.md has the details.
+services:
+  ruby-app:
+    build:
+      args:
+        OTEL_MODE: zerocode
+    environment:
+      OTEL_MODE: zerocode
+      OTEL_RUBY_INSTRUMENTATION_RACK_CONFIG_OPTS: untraced_endpoints=/health
+      OTEL_METRICS_EXPORTER: none
+      OTEL_LOGS_EXPORTER: none
+
+  python-app:
+    build:
+      args:
+        OTEL_MODE: zerocode
+    environment:
+      OTEL_MODE: zerocode
+
+  js-app:
+    build:
+      args:
+        OTEL_MODE: zerocode
+    environment:
+      OTEL_MODE: zerocode
+      OTEL_NODE_ENABLED_INSTRUMENTATIONS: http,express,pg

@@ -1,0 +1,86 @@
+{
+  "name": "otel-muzzle",
+  "version": "0.1.0",
+  "description": "Drops INTERNAL spans from OpenTelemetry Node.js traces and keeps every trace connected.",
+  "keywords": [
+    "opentelemetry",
+    "otel",
+    "tracing",
+    "sampler",
+    "sampling",
+    "spans",
+    "nodejs"
+  ],
+  "homepage": "https://github.com/ericmustin/otel-muzzle/tree/main/js#readme",
+  "bugs": {
+    "url": "https://github.com/ericmustin/otel-muzzle/issues"
+  },
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/ericmustin/otel-muzzle.git",
+    "directory": "js"
+  },
+  "license": "Apache-2.0",
+  "author": "Eric Mustin",
+  "main": "build/src/index.js",
+  "types": "build/src/index.d.ts",
+  "exports": {
+    ".": {
+      "types": "./build/src/index.d.ts",
+      "default": "./build/src/index.js"
+    },
+    "./package.json": "./package.json"
+  },
+  "files": [
+    "build/src",
+    "CHANGELOG.md"
+  ],
+  "engines": {
+    "node": "^18.19.0 || >=20.6.0"
+  },
+  "scripts": {
+    "clean": "rimraf build/*",
+    "compile": "tsc -p .",
+    "lint": "eslint . && markdownlint-cli2 && npm run compile && publint --strict",
+    "lint:fix": "eslint . --fix && markdownlint-cli2 --fix",
+    "prepack": "npm run clean && npm run compile",
+    "pretest": "npm run compile",
+    "tdd": "npm test -- --watch --watch-files \"**/*.ts\"",
+    "test": "nyc mocha 'test/*.test.ts'",
+    "test:npm-install": "npm run compile && mocha 'test/integration/*.test.ts'"
+  },
+  "peerDependencies": {
+    "@opentelemetry/api": "^1.9.0"
+  },
+  "peerDependenciesMeta": {
+    "@opentelemetry/sdk-trace": {
+      "optional": true
+    }
+  },
+  "devDependencies": {
+    "@eslint/js": "9.39.4",
+    "@istanbuljs/nyc-config-typescript": "1.0.2",
+    "@opentelemetry/api": "1.10.0",
+    "@opentelemetry/context-async-hooks": "3.1.0",
+    "@opentelemetry/core": "3.1.0",
+    "@opentelemetry/sdk-node": "0.301.0",
+    "@opentelemetry/sdk-trace": "3.1.0",
+    "@types/mocha": "10.0.10",
+    "@types/node": "~20.19.0",
+    "eslint": "9.39.4",
+    "eslint-config-prettier": "10.1.8",
+    "eslint-plugin-n": "17.21.3",
+    "eslint-plugin-prettier": "5.5.7",
+    "eslint-plugin-yet-another-license-header": "0.2.0",
+    "globals": "17.4.0",
+    "markdownlint-cli2": "0.19.1",
+    "mocha": "11.7.5",
+    "nyc": "17.1.0",
+    "prettier": "3.6.2",
+    "publint": "0.3.24",
+    "rimraf": "5.0.10",
+    "ts-node": "10.9.2",
+    "typescript": "~5.9.3",
+    "typescript-eslint": "8.41.0"
+  }
+}

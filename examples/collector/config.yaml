@@ -1,0 +1,30 @@
+# Every span goes to examples/out/spans.jsonl (read by examples/verify.py) and to Jaeger (http://localhost:16686).
+receivers:
+  otlp:
+    protocols:
+      grpc:
+        endpoint: 0.0.0.0:4317
+      http:
+        endpoint: 0.0.0.0:4318
+
+processors:
+  batch:
+    timeout: 200ms
+
+exporters:
+  debug:
+    verbosity: basic
+  file:
+    path: /out/spans.jsonl
+    flush_interval: 500ms
+  otlp/jaeger:
+    endpoint: jaeger:4317
+    tls:
+      insecure: true
+
+service:
+  pipelines:
+    traces:
+      receivers: [otlp]
+      processors: [batch]
+      exporters: [debug, file, otlp/jaeger]

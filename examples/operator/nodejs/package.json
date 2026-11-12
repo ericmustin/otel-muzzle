@@ -1,0 +1,13 @@
+{
+  "name": "otel-muzzle-k8s-autoinstrumentation",
+  "version": "0.0.1",
+  "private": true,
+  "description": "A spec.nodejs.image for the OpenTelemetry Operator: its autoinstrumentation-nodejs image plus otel-muzzle.",
+  "dependencies": {
+    "@opentelemetry/api": "1.10.0",
+    "@opentelemetry/auto-instrumentations-node": "0.82.0",
+    "@opentelemetry/sdk-node": "0.300.0",
+    "@opentelemetry/sdk-trace": "3.0.0",
+    "otel-muzzle": "file:/pkg/otel-muzzle.tgz"
+  }
+}

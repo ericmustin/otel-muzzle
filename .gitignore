@@ -1,0 +1,24 @@
+# language build/venv artefacts
+node_modules/
+build/
+dist/
+.venv/
+__pycache__/
+*.py[cod]
+*.egg-info/
+.pytest_cache/
+*.gem
+*.tgz
+# Node.js test coverage (nyc)
+.nyc_output/
+coverage/
+# collector output from the e2e run
+examples/out/*
+!examples/out/.gitkeep
+# scratch
+.DS_Store
+# local tool state
+.claude/
+.env
+bench/out/
+examples/backends/elastic/out/

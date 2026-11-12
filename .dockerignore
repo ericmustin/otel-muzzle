@@ -1,0 +1,11 @@
+# Every app image builds from the repository root and installs the packages from source.
+**/node_modules
+**/build
+**/.venv
+**/__pycache__
+.git
+.claude
+.superpowers
+examples/out
+.env
+bench/out

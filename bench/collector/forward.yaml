@@ -1,0 +1,23 @@
+# Overlay merged on top of config.yaml when OTLP_FORWARD_ENDPOINT and OTLP_FORWARD_AUTHORIZATION are set (see run.sh).
+# Adds a second traces pipeline that forwards the same spans to that OTLP/HTTP endpoint, with each benchmark
+# variant as its own deployment.environment.name, muzzle-bench-<variant>. The measured file pipeline is untouched.
+processors:
+  resource/bench:
+    attributes:
+      - key: deployment.environment.name
+        value: muzzle-bench-${env:BENCH_VARIANT}
+        action: upsert
+  batch/forward: {}
+
+exporters:
+  otlphttp/forward:
+    endpoint: ${env:OTLP_FORWARD_ENDPOINT}
+    headers:
+      Authorization: ${env:OTLP_FORWARD_AUTHORIZATION}
+
+service:
+  pipelines:
+    traces/forward:
+      receivers: [otlp]
+      processors: [resource/bench, batch/forward]
+      exporters: [otlphttp/forward]

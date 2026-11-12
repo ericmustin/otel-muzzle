@@ -1,0 +1,14 @@
+# frozen_string_literal: true
+
+# SPDX-License-Identifier: Apache-2.0
+
+# The floor: the oldest SDK and instrumentation base otel-muzzle supports.
+appraise 'sdk-1.10' do
+  gem 'opentelemetry-sdk', '1.10.0'
+  gem 'opentelemetry-instrumentation-base', '~> 0.26.0'
+end
+
+# Whatever the Gemfile resolves to.
+appraise 'latest' do
+  # No pins.
+end

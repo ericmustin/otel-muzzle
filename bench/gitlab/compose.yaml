@@ -1,0 +1,80 @@
+# GitLab CE for the otel-muzzle benchmark: GitLab, the measurement collector, and k6.
+# bench/gitlab/run.sh drives it; nothing here publishes a host port.
+#
+# GITLAB_IMAGE picks GitLab's own tracing (muzzle-bench/gitlab:stock) or the same plus otel-muzzle
+# (muzzle-bench/gitlab:muzzle). The named volumes keep GitLab's data, so the seeded project survives a switch.
+name: muzzle-bench-gitlab
+
+# Throwaway values for a GitLab that never leaves this Docker network.
+x-bench-env: &bench-env
+  BENCH_TOKEN: ${BENCH_TOKEN:-muzzle-bench-api-token}
+  BENCH_PASSWORD: ${BENCH_PASSWORD:-bench-Kq7v-muzzle-2026}
+  GITLAB_URL: http://gitlab
+  BENCH_PROJECT: root/sinatra
+
+services:
+  otel-collector:
+    image: otel/opentelemetry-collector-contrib:0.158.0
+    user: "${BENCH_UID:-10001}:${BENCH_GID:-10001}"
+    command:
+      - --config=/etc/otelcol/config.yaml
+      - --config=/etc/otelcol/local-only.yaml
+    environment:
+      BENCH_VARIANT: ${BENCH_VARIANT:-adhoc}
+      BENCH_PHASE: ${BENCH_PHASE:-measure}
+    volumes:
+      - ../collector:/etc/otelcol:ro
+      - ${BENCH_OUT:-../out/gitlab/adhoc}:/out
+
+  gitlab:
+    image: ${GITLAB_IMAGE:-muzzle-bench/gitlab:stock}
+    hostname: gitlab
+    shm_size: 256m
+    environment:
+      <<: *bench-env
+      GITLAB_ROOT_PASSWORD: ${BENCH_PASSWORD:-bench-Kq7v-muzzle-2026}
+      # Sized for an 8 GB Docker VM. Cron jobs, Sidekiq polling and health checks stay as shipped. Product usage
+      # events and Service Ping are off here, and the version check in setup.rb, so GitLab calls nothing outside.
+      GITLAB_OMNIBUS_CONFIG: |
+        external_url 'http://gitlab'
+        puma['worker_processes'] = 2
+        sidekiq['concurrency'] = 10
+        prometheus_monitoring['enable'] = false
+        gitlab_kas['enable'] = false
+        gitlab_rails['usage_ping_enabled'] = false
+        gitlab_rails['env'] = {
+          'GITLAB_ENABLE_OTEL_EXPORTERS' => 'true',
+          'GITLAB_PRODUCT_USAGE_DATA_ENABLED' => 'false',
+          'OTEL_EXPORTER_OTLP_ENDPOINT' => 'http://otel-collector:4318',
+          'OTEL_SERVICE_NAME' => 'gitlab',
+          'OTEL_MUZZLE_VERBOSE_RATIO' => '${OTEL_MUZZLE_VERBOSE_RATIO:-0}',
+        }
+    volumes:
+      - gitlab-config:/etc/gitlab
+      - gitlab-data:/var/opt/gitlab
+      - gitlab-logs:/var/log/gitlab
+      - ./setup.rb:/bench/setup.rb:ro
+    healthcheck:
+      test: ["CMD-SHELL", "curl -fs 'http://localhost/-/readiness?all=1' >/dev/null"]
+      interval: 10s
+      timeout: 10s
+      start_period: 10m
+      retries: 30
+
+  # Load generator: started only by run.sh (`docker compose run k6 ...`).
+  k6:
+    image: grafana/k6:2.3.0
+    profiles: ["load"]
+    user: "${BENCH_UID:-10001}:${BENCH_GID:-10001}"
+    working_dir: /bench
+    environment:
+      <<: *bench-env
+      K6_NO_USAGE_REPORT: "true"   # k6 otherwise reports each run to Grafana
+    volumes:
+      - ./:/bench:ro
+      - ${BENCH_OUT:-../out/gitlab/adhoc}:/out
+
+volumes:
+  gitlab-config:
+  gitlab-data:
+  gitlab-logs:

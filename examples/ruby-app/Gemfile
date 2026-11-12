@@ -1,0 +1,26 @@
+# frozen_string_literal: true
+
+# SPDX-License-Identifier: Apache-2.0
+
+source 'https://rubygems.org'
+
+gem 'net-http', require: 'net/http'
+gem 'pg', '~> 1.5'
+gem 'puma', '>= 6'
+gem 'rackup', '~> 2.1'
+gem 'sinatra', '~> 4.0', require: 'sinatra/base'
+
+# The package under test, copied into the image from the repository's ruby/ directory. This line is all an app
+# needs: Bundler.require loads it and use_all installs it, in every mode below.
+gem 'otel-muzzle', path: '/pkg/ruby'
+
+# OTEL_MODE=code configures the SDK in app.rb. In zerocode and operator modes the zero-code loader brings its
+# own SDK, exporter and instrumentation gems, so the Gemfile leaves them out (the loader warns otherwise).
+if ENV.fetch('OTEL_MODE', 'code') == 'code'
+  gem 'opentelemetry-exporter-otlp', '~> 0.29'
+  gem 'opentelemetry-instrumentation-net_http'
+  gem 'opentelemetry-instrumentation-pg'
+  gem 'opentelemetry-instrumentation-rack'
+  gem 'opentelemetry-instrumentation-sinatra'
+  gem 'opentelemetry-sdk', '~> 1.10'
+end

@@ -1,0 +1,164 @@
+# The otel-muzzle example stack: three small apps, one per language, each running otel-muzzle, that call each other.
+# A collector writes every span to examples/out/spans.jsonl and forwards it to Jaeger. examples/README.md explains
+# the apps and the end-to-end checks.
+#
+#   GET ruby-app:4567/chain -> js-app:3000/chain -> python-app:5000/chain -> js-app:3000/hello
+#   In each app: SERVER span -> INTERNAL <lang>.work -> CLIENT spans (a Postgres query, the next HTTP call).
+#   otel-muzzle drops the INTERNAL span unless the trace is verbose, and the CLIENT spans move up to the SERVER span.
+#
+# Look around:  docker compose up --build -d
+#               curl localhost:4567/chain, then open http://localhost:16686 (Jaeger)
+# Test:         docker compose run --rm --build verifier
+#               starts whatever isn't running, sends four requests, checks their traces, and exits 0 or 1
+# Clean up:     docker compose down -v
+#
+# Each app is set up "in code" here. For the zero-code or OpenTelemetry Operator setups, add
+# -f docker-compose.yml -f examples/compose/zerocode.yml (or operator.yml) to every command, before the subcommand.
+# `make e2e [MODE=zerocode|operator]` runs the test and the clean-up in one step.
+name: otel-muzzle
+
+x-app-env: &app-env
+  OTEL_EXPORTER_OTLP_ENDPOINT: http://otel-collector:4318
+  OTEL_EXPORTER_OTLP_PROTOCOL: http/protobuf
+  OTEL_TRACES_EXPORTER: otlp
+  OTEL_BSP_SCHEDULE_DELAY: "200"
+  OTEL_MUZZLE_VERBOSE_RATIO: ${OTEL_MUZZLE_VERBOSE_RATIO:-0.1}
+  # The sampler otel-muzzle wraps. make e2e-delegate sets parentbased_traceidratio with ARG 0, which drops
+  # every new root; the ARG is ignored by the default.
+  OTEL_TRACES_SAMPLER: ${OTEL_TRACES_SAMPLER:-parentbased_always_on}
+  OTEL_TRACES_SAMPLER_ARG: ${OTEL_TRACES_SAMPLER_ARG:-1}
+  PGHOST: postgres
+  PGPORT: "5432"
+  PGUSER: app
+  PGPASSWORD: app
+  PGDATABASE: app
+
+services:
+  postgres:
+    image: postgres:16-alpine
+    environment:
+      POSTGRES_USER: app
+      POSTGRES_PASSWORD: app
+      POSTGRES_DB: app
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U app -d app"]
+      interval: 2s
+      timeout: 2s
+      retries: 30
+
+  # Receives OTLP from the apps. Writes every span to examples/out/spans.jsonl, which the verifier reads, and
+  # forwards it to Jaeger.
+  otel-collector:
+    image: otel/opentelemetry-collector-contrib:0.158.0
+    command: ["--config=/etc/otelcol/config.yaml"]
+    volumes:
+      - ./examples/collector/config.yaml:/etc/otelcol/config.yaml:ro
+      - ./examples/out:/out
+    ports:
+      - "4318:4318"
+    depends_on:
+      jaeger: { condition: service_started }
+
+  # The trace UI: http://localhost:16686
+  jaeger:
+    image: jaegertracing/jaeger:2.12.0
+    ports:
+      - "16686:16686"
+
+  ruby-app:
+    build:
+      context: .
+      dockerfile: examples/ruby-app/Dockerfile
+      args:
+        OTEL_MODE: code
+    environment:
+      <<: *app-env
+      OTEL_MODE: code
+      OTEL_SERVICE_NAME: ruby-app
+      DOWNSTREAM_URL: http://js-app:3000/chain
+      PORT: "4567"
+    ports: ["4567:4567"]
+    depends_on:
+      postgres: { condition: service_healthy }
+      otel-collector: { condition: service_started }
+    healthcheck:
+      test: ["CMD-SHELL", "ruby -rnet/http -e 'exit(Net::HTTP.get_response(URI(\"http://localhost:4567/health\")).code == \"200\")'"]
+      interval: 2s
+      timeout: 3s
+      retries: 60
+
+  js-app:
+    build:
+      context: .
+      dockerfile: examples/js-app/Dockerfile
+      args:
+        OTEL_MODE: code
+    environment:
+      <<: *app-env
+      OTEL_MODE: code
+      OTEL_SERVICE_NAME: js-app
+      DOWNSTREAM_URL: http://python-app:5000/chain
+      PORT: "3000"
+      OTEL_METRICS_EXPORTER: none
+      OTEL_LOGS_EXPORTER: none
+    ports: ["3000:3000"]
+    depends_on:
+      postgres: { condition: service_healthy }
+      otel-collector: { condition: service_started }
+    healthcheck:
+      test: ["CMD-SHELL", "node -e \"fetch('http://localhost:3000/health').then(r=>process.exit(r.ok?0:1)).catch(()=>process.exit(1))\""]
+      interval: 2s
+      timeout: 3s
+      retries: 60
+
+  python-app:
+    build:
+      context: .
+      dockerfile: examples/python-app/Dockerfile
+      args:
+        OTEL_MODE: code
+    environment:
+      <<: *app-env
+      OTEL_MODE: code
+      OTEL_SERVICE_NAME: python-app
+      # /chain ends with a call back into js-app, made under the dropped py.work span: the resulting
+      # CLIENT span is what shows that the Python patch reparents.
+      DOWNSTREAM_URL: http://js-app:3000/hello
+      PORT: "5000"
+      OTEL_METRICS_EXPORTER: none
+      OTEL_LOGS_EXPORTER: none
+    ports: ["5001:5000"]
+    depends_on:
+      postgres: { condition: service_healthy }
+      otel-collector: { condition: service_started }
+    healthcheck:
+      # -I: in operator mode, a plain `python` would load the injected sitecustomize and trace the health check.
+      test: ["CMD-SHELL", "python -I -c \"import urllib.request,sys; sys.exit(0 if urllib.request.urlopen('http://localhost:5000/health').status==200 else 1)\""]
+      interval: 2s
+      timeout: 3s
+      retries: 60
+
+  # The end-to-end test: `docker compose run --rm --build verifier`. Not part of `docker compose up` (profile e2e).
+  # It starts the three apps first and waits until they are healthy; `run --no-deps` with APP_URLS and SERVICES
+  # checks a subset instead (make e2e-ruby). Exits 0 when every scenario passes, 1 otherwise.
+  verifier:
+    image: python:3.12-slim
+    profiles: ["e2e"]
+    volumes:
+      - ./examples/verify.py:/verify.py:ro
+      - ./testdata:/testdata:ro
+      - ./examples/out:/out:ro
+    environment:
+      ENTRY_URL: http://ruby-app:4567
+      ENTRY_PATH: ${ENTRY_PATH:-/chain}
+      SERVICES: ${SERVICES:-ruby-app,js-app,python-app}
+      APP_URLS: ${APP_URLS:-http://ruby-app:4567,http://js-app:3000,http://python-app:5000}
+      SPANS_FILE: /out/spans.jsonl
+      RATIO: ${OTEL_MUZZLE_VERBOSE_RATIO:-0.1}
+      ROOTS_DROPPED: ${ROOTS_DROPPED:-0}
+    depends_on:
+      otel-collector: { condition: service_started }
+      ruby-app: { condition: service_healthy }
+      js-app: { condition: service_healthy }
+      python-app: { condition: service_healthy }
+    command: ["python", "-u", "/verify.py"]

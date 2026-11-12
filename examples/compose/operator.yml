@@ -1,0 +1,83 @@
+# Operator mode: what the OpenTelemetry Operator does to a pod, without Kubernetes. An init container copies
+# the language's autoinstrumentation image into a shared volume, and the app's environment points the runtime
+# at it (internal/instrumentation/<language>.go in opentelemetry-operator). Use on top of docker-compose.yml:
+#   docker compose -f docker-compose.yml -f examples/compose/operator.yml run --rm --build verifier
+# or make e2e MODE=operator. examples/README.md has the details.
+services:
+  ruby-autoinstrumentation:
+    image: ghcr.io/open-telemetry/opentelemetry-ruby-instrumentation/autoinstrumentation-ruby:0.1.0
+    command: ["cp", "-r", "/autoinstrumentation/.", "/otel-auto-instrumentation-ruby"]
+    volumes:
+      - ruby-autoinstrumentation:/otel-auto-instrumentation-ruby
+
+  ruby-app:
+    build:
+      args:
+        OTEL_MODE: operator
+    environment:
+      OTEL_MODE: operator
+      RUBYOPT: " -r /otel-auto-instrumentation-ruby/src/autoinstrumentation"
+      OTEL_RUBY_INSTRUMENTATION_RACK_CONFIG_OPTS: untraced_endpoints=/health
+      OTEL_METRICS_EXPORTER: none
+      OTEL_LOGS_EXPORTER: none
+    volumes:
+      - ruby-autoinstrumentation:/otel-auto-instrumentation-ruby
+    depends_on:
+      ruby-autoinstrumentation: { condition: service_completed_successfully }
+
+  python-autoinstrumentation:
+    image: ghcr.io/open-telemetry/opentelemetry-operator/autoinstrumentation-python:0.66b1
+    command: ["cp", "-r", "/autoinstrumentation/.", "/otel-auto-instrumentation-python"]
+    volumes:
+      - python-autoinstrumentation:/otel-auto-instrumentation-python
+
+  # otel-muzzle is pip-installed into the app image with --no-deps, so the Operator's copy of OpenTelemetry is the
+  # only one; Python finds otel-muzzle's entry point in site-packages all the same.
+  python-app:
+    build:
+      args:
+        OTEL_MODE: operator
+    environment:
+      OTEL_MODE: operator
+      PYTHONPATH: /otel-auto-instrumentation-python/opentelemetry/instrumentation/auto_instrumentation:/otel-auto-instrumentation-python
+      OTEL_EXPORTER_OTLP_PROTOCOL: http/protobuf
+      OTEL_TRACES_EXPORTER: otlp
+      OTEL_METRICS_EXPORTER: none
+      OTEL_LOGS_EXPORTER: none
+    volumes:
+      - python-autoinstrumentation:/otel-auto-instrumentation-python
+    depends_on:
+      python-autoinstrumentation: { condition: service_completed_successfully }
+
+  # The Operator's Node.js image has no hook for an extra package, so otel-muzzle ships as a custom
+  # spec.nodejs.image (examples/operator/nodejs) whose autoinstrumentation.js starts a NodeSDK with a MuzzleSampler.
+  js-autoinstrumentation:
+    build:
+      context: .
+      dockerfile: examples/operator/nodejs/Dockerfile
+    command: ["cp", "-r", "/autoinstrumentation/.", "/otel-auto-instrumentation-nodejs"]
+    volumes:
+      - js-autoinstrumentation:/otel-auto-instrumentation-nodejs
+
+  js-app:
+    build:
+      args:
+        OTEL_MODE: operator
+    environment:
+      OTEL_MODE: operator
+      NODE_OPTIONS: " --require /otel-auto-instrumentation-nodejs/autoinstrumentation.js"
+      OTEL_NODE_ENABLED_INSTRUMENTATIONS: http,express,pg
+      OTEL_METRICS_EXPORTER: none
+      OTEL_LOGS_EXPORTER: none
+    volumes:
+      - js-autoinstrumentation:/otel-auto-instrumentation-nodejs
+    depends_on:
+      js-autoinstrumentation: { condition: service_completed_successfully }
+    healthcheck:
+      # An empty NODE_OPTIONS keeps the health check itself uninstrumented.
+      test: ["CMD-SHELL", "NODE_OPTIONS= node -e \"fetch('http://localhost:3000/health').then(r=>process.exit(r.ok?0:1)).catch(()=>process.exit(1))\""]
+
+volumes:
+  ruby-autoinstrumentation:
+  python-autoinstrumentation:
+  js-autoinstrumentation:

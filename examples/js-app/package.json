@@ -1,0 +1,14 @@
+{
+  "name": "otel-muzzle-js-app",
+  "private": true,
+  "description": "Sample app for the otel-muzzle end-to-end test. The Dockerfile adds otel-muzzle and the SDK per OTEL_MODE.",
+  "main": "app.js",
+  "scripts": {
+    "start": "./start.sh"
+  },
+  "dependencies": {
+    "@opentelemetry/api": "^1.10.0",
+    "express": "^5.1.0",
+    "pg": "^8.16.0"
+  }
+}

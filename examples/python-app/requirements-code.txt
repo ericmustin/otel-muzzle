@@ -1,0 +1,6 @@
+# OTEL_MODE=code: app.py sets up the SDK and calls otel_muzzle.install().
+opentelemetry-sdk>=1.30,<2
+opentelemetry-exporter-otlp-proto-http
+opentelemetry-instrumentation-flask
+opentelemetry-instrumentation-requests
+opentelemetry-instrumentation-psycopg2

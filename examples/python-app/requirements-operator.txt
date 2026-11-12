@@ -1,0 +1,2 @@
+# OTEL_MODE=operator: nothing. The Operator's init container copies its autoinstrumentation image into the pod and
+# PYTHONPATH puts it first, so OpenTelemetry comes from there. The Dockerfile installs otel-muzzle with --no-deps.

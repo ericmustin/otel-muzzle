@@ -1,0 +1,7 @@
+# OTEL_MODE=zerocode: opentelemetry-instrument (from opentelemetry-distro) sets up the SDK and loads every
+# opentelemetry_instrumentor entry point, otel-muzzle's included.
+opentelemetry-distro
+opentelemetry-exporter-otlp-proto-http
+opentelemetry-instrumentation-flask
+opentelemetry-instrumentation-requests
+opentelemetry-instrumentation-psycopg2

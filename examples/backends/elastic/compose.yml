@@ -1,0 +1,12 @@
+# Also forwards every span to Elastic, tagged deployment.environment.name=$ELASTIC_ENVIRONMENT, which Kibana shows
+# as the service environment. The endpoint and API key come from the shell environment; nothing is written to disk.
+# examples/backends/elastic/README.md runs this twice, with otel-muzzle off and on.
+services:
+  otel-collector:
+    command: ["--config=/etc/otelcol/config.yaml", "--config=/etc/otelcol/elastic.yaml"]
+    volumes:
+      - ./examples/backends/elastic/collector.yaml:/etc/otelcol/elastic.yaml:ro
+    environment:
+      ELASTIC_OTLP_ENDPOINT: ${ELASTIC_OTLP_ENDPOINT:?set ELASTIC_OTLP_ENDPOINT}
+      ELASTIC_API_KEY: ${ELASTIC_API_KEY:?set ELASTIC_API_KEY}
+      ELASTIC_ENVIRONMENT: ${ELASTIC_ENVIRONMENT:-otel-muzzle-demo}

@@ -1,0 +1,8 @@
+--no-private
+--title=otel-muzzle
+--markup=markdown
+--main=README.md
+./lib/**/*.rb
+-
+README.md
+CHANGELOG.md

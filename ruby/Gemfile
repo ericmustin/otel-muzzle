@@ -1,0 +1,27 @@
+# frozen_string_literal: true
+
+# SPDX-License-Identifier: Apache-2.0
+
+source 'https://rubygems.org'
+
+gemspec
+
+# What an application brings; Appraisals pins them.
+gem 'opentelemetry-instrumentation-base'
+gem 'opentelemetry-sdk'
+
+# Constraints copied from instrumentation/rack/Gemfile in opentelemetry-ruby-contrib, except rubocop-rake
+# (not in that Gemfile; the current release).
+group :test do
+  gem 'appraisal', '~> 2.5.0'
+  gem 'minitest', '~> 6.0.0'
+  gem 'opentelemetry-test-helpers', '~> 0.9.0'
+  gem 'rake', '>= 13'
+  gem 'rubocop', '~> 1.92.0'
+  gem 'rubocop-performance', '~> 1.27.0'
+  gem 'rubocop-rake', '~> 0.7.1'
+  gem 'simplecov', '~> 1.3.0'
+  gem 'yard', '~> 0.9.0'
+end
+
+gem 'logger' if RUBY_VERSION >= '3.4'
