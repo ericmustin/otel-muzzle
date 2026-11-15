@@ -5,6 +5,7 @@ from __future__ import annotations
 
 import json
 from pathlib import Path
+from typing import Any
 
 from opentelemetry import trace
 from opentelemetry.context import Context
@@ -22,6 +23,10 @@ LOCAL_SPAN_ID = 0x53995C3F42CD8AD8
 PACKAGE_DIR = Path(__file__).resolve().parent.parent
 RATIO_VECTORS = PACKAGE_DIR.parent / "testdata" / "ratio_vectors.json"
 RATIO_ENV_VECTORS = PACKAGE_DIR.parent / "testdata" / "ratio_env_vectors.json"
+EXAMPLE_POLICY = PACKAGE_DIR.parent / "examples" / "policies" / "muzzle.json"
+# Policy mode reads trace-id bytes 9-15. All ones is kept by any percentage above 0, and zero by none below 100.
+POLICY_KEEP_TRACE_ID = 0x4BF92F3577B34DA6A3FFFFFFFFFFFFFF
+POLICY_DROP_TRACE_ID = 0x4BF92F3577B34DA6A300000000000000
 VERBOSE = TraceState([("muzzle", "verbose")])
 VENDOR = TraceState([("vendor", "x")])
 
@@ -34,6 +39,12 @@ def ratio_vectors() -> list[dict[str, object]]:
 def ratio_env_vectors() -> list[dict[str, object]]:
     cases: list[dict[str, object]] = json.loads(RATIO_ENV_VECTORS.read_text())["cases"]
     return cases
+
+
+def policy_vectors(name: str) -> dict[str, Any]:
+    """testdata/policy_<name>_vectors.json: threshold, tracestate, regex or decision."""
+    doc: dict[str, Any] = json.loads((PACKAGE_DIR.parent / "testdata" / f"policy_{name}_vectors.json").read_text())
+    return doc
 
 
 def flags(sampled: bool) -> TraceFlags:

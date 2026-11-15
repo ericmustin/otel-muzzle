@@ -42,6 +42,7 @@ The same in every language:
 | `OTEL_MUZZLE_VERBOSE_RATIO` | `0.1` | share of traces that keep every span, in `[0, 1]` |
 | `tracestate: muzzle=verbose` | | sent with a valid, sampled `traceparent`, makes that trace verbose everywhere |
 | `OTEL_TRACES_SAMPLER` | `parentbased_always_on` | the sampler otel-muzzle wraps; its decisions stand |
+| `OTEL_MUZZLE_POLICY_FILE` | | experimental: a file of span sampling policies that replaces the rule above; see [Policy mode](#policy-mode) |
 
 Every service makes the same ratio choice from the trace id (bytes 12–15), so a trace is verbose in all three
 languages or in none, with nothing extra on the wire. The choice does not depend on which traces head sampling keeps,
@@ -61,6 +62,57 @@ Two small pieces, the same in each language. [docs/design.md](docs/design.md) is
    span a fresh span id, so its children would point at a parent that is never exported. When the SDK returns a
    non-recording span under a sampled local parent, the patch hands back the parent's context instead, and the
    children attach to the parent. The patch holds no policy of its own.
+
+## Policy mode
+
+This mode is experimental. It follows a draft specification and will change with it.
+
+The rule otel-muzzle applies can come from a file instead: a set of `SpanSamplingPolicy` policies from the
+OpenTelemetry [Telemetry Policy](https://github.com/open-telemetry/opentelemetry-proto/pull/865) specification, in
+its Protobuf JSON form. Point `OTEL_MUZZLE_POLICY_FILE` at the file, in every language. The sampler then drops a
+span when the policies that match it say so, and the same patch keeps the trace connected.
+
+[examples/policies/muzzle.json](examples/policies/muzzle.json) is the built-in rule written as a policy: INTERNAL
+spans that have a parent are kept in 10% of the traces head sampling keeps, and in any trace with
+`tracestate: muzzle=verbose`.
+
+```json
+{
+  "policies": [
+    {
+      "id": "drop-internal-spans",
+      "spanSampling": {
+        "matches": [
+          { "target": { "recordField": "SPAN_RECORD_FIELD_KIND" },
+            "predicate": { "equals": { "stringValue": "INTERNAL" } } },
+          { "target": { "recordField": "SPAN_RECORD_FIELD_PARENT_SPAN_ID" },
+            "predicate": { "exists": {} } },
+          { "target": { "recordField": "SPAN_RECORD_FIELD_TRACE_STATE" },
+            "predicate": { "regex": "(^|,)\\s*muzzle=verbose\\s*(,|$)" }, "negate": true }
+        ],
+        "sampling": { "percentage": 10, "mode": "SAMPLING_MODE_PROPORTIONAL" }
+      }
+    }
+  ]
+}
+```
+
+A policy can match on the span's name, kind, trace id, parent span id, tracestate and start attributes. When
+several policies match a span, the lowest percentage wins. A span no policy matches is kept.
+
+- **Which traces.** A span is kept when the trace's randomness is at or above the policy's threshold. The randomness
+  is the `rv` value of the `ot` tracestate member when a request carries one, and otherwise the last 7 bytes of
+  the trace id, as in OpenTelemetry's consistent probability sampling. Every service reads the same value, so a
+  trace is verbose in all of them or in none. The built-in rule reads other bytes, so the two modes pick different
+  traces.
+- **Failing open.** A file that cannot be read, or a policy that is not valid, drops nothing and logs a warning.
+- **Not the whole specification.** The packages sample spans only, read `th` and `rv` from the tracestate without
+  writing a threshold, and cannot match on the resource or the instrumentation scope.
+  [docs/policy-conformance.md](docs/policy-conformance.md) lists what is supported, where the packages differ
+  from the specification, and one case to know about: the example policy also matches an INTERNAL span whose
+  parent is remote, which the built-in rule keeps.
+
+Anyone who can write the policy file controls which spans a service exports.
 
 ## Benchmark
 

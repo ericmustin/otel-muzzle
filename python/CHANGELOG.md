@@ -15,3 +15,6 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 - Add `OTEL_MUZZLE_VERBOSE_RATIO` and the `ratio` argument, the share of traces kept verbose (default 0.1)
 - Add the `muzzle=verbose` tracestate member, which forces a verbose trace
 - Add type information (`py.typed`)
+- Add policy mode (experimental): `OTEL_MUZZLE_POLICY_FILE` and the `policy_file` argument read OpenTelemetry
+  Telemetry Policy span sampling policies from a file, which then replace the built-in rule;
+  `otel_muzzle.policy.reload()` reads the file again

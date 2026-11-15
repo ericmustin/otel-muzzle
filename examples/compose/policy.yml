@@ -1,0 +1,22 @@
+# Policy mode: the apps drop spans by the span sampling policy in examples/policies/muzzle.json instead of the
+# built-in rule. Use on top of docker-compose.yml, after a mode file if there is one:
+#   docker compose -f docker-compose.yml -f examples/compose/policy.yml run --rm --build verifier
+# or make e2e POLICY=1 [MODE=zerocode|operator]. examples/README.md has the details.
+x-policy: &policy
+  volumes:
+    - ./examples/policies:/policy:ro
+  environment:
+    OTEL_MUZZLE_POLICY_FILE: /policy/muzzle.json
+    # Unused in policy mode; left blank so that no package warns about it.
+    OTEL_MUZZLE_VERBOSE_RATIO: ""
+
+services:
+  ruby-app: *policy
+  js-app: *policy
+  python-app: *policy
+
+  verifier:
+    volumes:
+      - ./examples/policies:/policy:ro
+    environment:
+      POLICY_FILE: /policy/muzzle.json

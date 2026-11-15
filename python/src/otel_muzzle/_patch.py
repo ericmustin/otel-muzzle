@@ -14,37 +14,48 @@ from typing import Any, Final
 
 from opentelemetry.context import Context
 from opentelemetry.sdk.trace import Tracer
+from opentelemetry.sdk.trace.sampling import Sampler
 from opentelemetry.trace import NonRecordingSpan, Span, get_current_span
 
+from otel_muzzle.policy import _runtime
+from otel_muzzle.policy.span_sampling import SpanSamplingImplementer
 from otel_muzzle.sampler import MuzzleSampler, _ratio_from_env
 
 _MARK: Final = "_otel_muzzle_patch"
 
 _lock = threading.Lock()
-# The ratio for the samplers the patch wraps while install() is in effect; None when it is not.
+# What the samplers the patch wraps decide with while install() is in effect: the ratio of the built-in rule, or in
+# policy mode the policies. Both are None when install() is not in effect.
 _ratio: float | None = None
+_policies: SpanSamplingImplementer | None = None
 
 
 class _InstalledSampler(MuzzleSampler):
-    """A ``MuzzleSampler`` that the patch put on a tracer, which it takes off again after ``uninstall()``."""
+    """A ``MuzzleSampler`` that the patch put on a tracer, which it takes off again after ``uninstall()``.
+
+    It takes its configuration as given: ``install()`` read the environment once, for every tracer.
+    """
+
+    def __init__(self, delegate: Sampler, ratio: float | None, policies: SpanSamplingImplementer | None) -> None:
+        self._configure(delegate, ratio, policies)
 
 
-def _sync_sampler(tracer: Tracer, ratio: float | None) -> None:
-    """Brings the tracer's sampler in line with ``ratio``: wrapped, re-wrapped, or its own again when None."""
+def _sync_sampler(tracer: Tracer, ratio: float | None, policies: SpanSamplingImplementer | None = None) -> None:
+    """Brings the tracer's sampler in line: wrapped, re-wrapped, or its own again when both arguments are None."""
     sampler = tracer.sampler
     if type(sampler) is _InstalledSampler:
-        if ratio is None:
+        if ratio is None and policies is None:
             tracer.sampler = sampler.delegate
-        elif sampler.ratio != ratio:
-            tracer.sampler = _InstalledSampler(sampler.delegate, ratio=ratio)
-    elif ratio is not None and not isinstance(sampler, MuzzleSampler):
-        tracer.sampler = _InstalledSampler(sampler, ratio=ratio)
+        elif sampler.ratio != ratio or sampler.policies is not policies:
+            tracer.sampler = _InstalledSampler(sampler.delegate, ratio, policies)
+    elif (ratio is not None or policies is not None) and not isinstance(sampler, MuzzleSampler):
+        tracer.sampler = _InstalledSampler(sampler, ratio, policies)
 
 
 def _patched(original: Callable[..., Span]) -> Callable[..., Span]:
     @functools.wraps(original)
     def start_span(self: Tracer, name: str, context: Context | None = None, *args: Any, **kwargs: Any) -> Span:
-        _sync_sampler(self, _ratio)
+        _sync_sampler(self, _ratio, _policies)
         span = original(self, name, context, *args, **kwargs)
         if span.is_recording():
             return span
@@ -78,18 +89,30 @@ def _apply() -> None:
         Tracer.start_span = _patched(Tracer.start_span)  # type: ignore[method-assign]
 
 
-def install(ratio: float | None) -> float:
-    """Patches and turns the lazy wrap on with ``ratio``, or ``OTEL_MUZZLE_VERBOSE_RATIO`` when it is None.
+def install(ratio: float | None, policy_file: str | None = None) -> float | None:
+    """Patches and turns the lazy wrap on.
+
+    With ``policy_file``, or ``OTEL_MUZZLE_POLICY_FILE`` when it is None, the wrap is in policy mode. Otherwise it
+    uses ``ratio``, or ``OTEL_MUZZLE_VERBOSE_RATIO`` when that is None.
 
     Returns:
-        The ratio in effect: the one an earlier call installed, which stays, or this call's.
+        The ratio in effect: the one an earlier call installed, which stays, or this call's. None in policy mode.
     """
-    global _ratio
+    global _ratio, _policies
     with _lock:
         _apply()
-        if _ratio is None:
-            _ratio = ratio if ratio is not None else _ratio_from_env()
+        if _ratio is None and _policies is None:
+            path = policy_file or _runtime.policy_file_from_env()
+            if path is not None:
+                _policies = _runtime.from_file(path)
+            else:
+                _ratio = ratio if ratio is not None else _ratio_from_env()
         return _ratio
+
+
+def policies() -> SpanSamplingImplementer | None:
+    """The policies the wrap decides with: None unless ``install()`` is in effect in policy mode."""
+    return _policies
 
 
 def uninstall() -> None:
@@ -99,6 +122,7 @@ def uninstall() -> None:
     ``MuzzleSampler`` the application set itself, or one a tracer is still sampling with on another thread, must keep
     having its drops reparented: removing the patch is what would break traces.
     """
-    global _ratio
+    global _ratio, _policies
     with _lock:
         _ratio = None
+        _policies = None

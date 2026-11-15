@@ -12,10 +12,11 @@ const manifest = JSON.parse(
 );
 
 describe('otel-muzzle package', () => {
-  it('should export MuzzleSampler and installMuzzle, and nothing else', () => {
+  it('should export MuzzleSampler, installMuzzle and reloadPolicies, and nothing else', () => {
     assert.deepStrictEqual(Object.keys(publicApi).sort(), [
       'MuzzleSampler',
       'installMuzzle',
+      'reloadPolicies',
     ]);
   });
 

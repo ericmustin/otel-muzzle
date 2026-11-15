@@ -63,6 +63,7 @@ set `OTEL_RUBY_ENABLED_INSTRUMENTATIONS`, include `muzzle` in the list.
 | Option | Environment variable | Default | Description |
 | ------ | -------------------- | ------- | ----------- |
 | `ratio` | `OTEL_MUZZLE_VERBOSE_RATIO` | `0.1` | Share of traces that keep every span: a decimal number in `[0, 1]`, such as `0.05` or `1e-3`. An invalid environment value is logged and replaced by `0.1`. |
+| `policy_file` | `OTEL_MUZZLE_POLICY_FILE` |  | Experimental. A file of span sampling policies that replaces the built-in rule. See [Policy mode](#policy-mode). |
 |  | `OTEL_RUBY_INSTRUMENTATION_MUZZLE_ENABLED` | `true` | `false` stops `use` and `use_all` from installing otel-muzzle. |
 |  | `OTEL_TRACES_SAMPLER`, `OTEL_TRACES_SAMPLER_ARG` | `parentbased_always_on` | The sampler otel-muzzle wraps. Its decisions stand, and its DROP always wins. |
 
@@ -78,6 +79,36 @@ end
 `Otel::Muzzle.install!(ratio:)` and `Otel::Muzzle::Sampler.new(delegate:, ratio:)` take the same value, and raise
 `ArgumentError` for anything that is not a number in `[0, 1]`. The first install sets the ratio. A later
 `install!` with a different ratio logs a warning and keeps the first.
+
+## Policy mode
+
+This mode is experimental. It follows a draft of the OpenTelemetry Telemetry Policy specification and will change
+with it.
+
+With a policy file, the sampler decides by its `SpanSamplingPolicy` policies instead of the built-in rule, and the
+children of dropped spans are still reparented. Set `OTEL_MUZZLE_POLICY_FILE`, which also works with the zero-code
+loader, or pass the path:
+
+```ruby
+OpenTelemetry::SDK.configure do |c|
+  c.use 'OpenTelemetry::Instrumentation::Muzzle', policy_file: '/etc/otel/policy.json'
+end
+```
+
+`Otel::Muzzle.install!(policy_file:)` takes the same path. The file is the Protobuf JSON form of a policy set.
+[examples/policies/muzzle.json](https://github.com/ericmustin/otel-muzzle/blob/main/examples/policies/muzzle.json)
+is the built-in rule written as a policy. In policy mode the ratio is not used: `OTEL_MUZZLE_VERBOSE_RATIO` and a
+`ratio` option are logged and ignored.
+
+The file is read once. A file that cannot be read, or a policy that is not valid, drops nothing and logs a warning.
+To read the file again while the application runs:
+
+```ruby
+Otel::Muzzle::Policy.reload # false when the file could not be loaded; the previous policies then stay in effect
+```
+
+The [conformance document](https://github.com/ericmustin/otel-muzzle/blob/main/docs/policy-conformance.md) lists
+what is supported and where otel-muzzle differs from the specification.
 
 ## Forcing a verbose trace
 

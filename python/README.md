@@ -85,6 +85,7 @@ COPY --from=build /otel-muzzle/ /autoinstrumentation-musl/
 | Option | Environment variable | Default | Description |
 | ------ | -------------------- | ------- | ----------- |
 | `ratio` | `OTEL_MUZZLE_VERBOSE_RATIO` | `0.1` | Share of traces that keep every span: a decimal number in `[0, 1]`, such as `0.05` or `1e-3`. An invalid environment value is logged (logger `otel_muzzle.sampler`) and replaced by `0.1`. |
+| `policy_file` | `OTEL_MUZZLE_POLICY_FILE` |  | Experimental. A file of span sampling policies that replaces the built-in rule. See [Policy mode](#policy-mode). |
 | `delegate` |  | `ParentBased(ALWAYS_ON)` | The first argument of `MuzzleSampler`: the sampler it wraps. Its decisions stand, and its DROP always wins. |
 |  | `OTEL_TRACES_SAMPLER`, `OTEL_TRACES_SAMPLER_ARG` | `parentbased_always_on` | The sampler `install()` wraps, as the SDK builds it. |
 |  | `OTEL_PYTHON_DISABLED_INSTRUMENTATIONS` |  | `muzzle` stops `opentelemetry-instrument` from installing otel-muzzle. |
@@ -96,6 +97,40 @@ later call with a different ratio logs a warning (logger `otel_muzzle`) and keep
 ignores `instrument()` while it is already instrumented, and `opentelemetry-instrument` has already called it, so
 under `opentelemetry-instrument` set `OTEL_MUZZLE_VERBOSE_RATIO` instead. `MuzzleInstrumentor().uninstrument()` undoes
 only what `instrument()` installed: after a direct `install()` it does nothing.
+
+## Policy mode
+
+This mode is experimental. It follows a draft of the OpenTelemetry Telemetry Policy specification and will change
+with it.
+
+With a policy file, the samplers decide by its `SpanSamplingPolicy` policies instead of the built-in rule, and
+`install()` keeps reparenting the children of dropped spans. Set `OTEL_MUZZLE_POLICY_FILE`, which also works under
+`opentelemetry-instrument`, or pass the path:
+
+```python
+import otel_muzzle
+
+otel_muzzle.install(policy_file="/etc/otel/policy.json")
+```
+
+The file is the Protobuf JSON form of a policy set.
+[examples/policies/muzzle.json](https://github.com/ericmustin/otel-muzzle/blob/main/examples/policies/muzzle.json)
+is the built-in rule written as a policy. In policy mode the ratio is not used: `OTEL_MUZZLE_VERBOSE_RATIO` and a
+`ratio` argument are logged and ignored.
+
+The file is read once. A file that cannot be read, or a policy that is not valid, drops nothing and logs a warning
+(loggers under `otel_muzzle.policy`). To read the file again while the application runs:
+
+```python
+from otel_muzzle import policy
+
+policy.reload()  # False when the file could not be loaded; the previous policies then stay in effect
+```
+
+`MuzzleSampler(policy_file=...)` puts one sampler in policy mode, and `MuzzleSampler(policies=...)` takes a
+`SpanSamplingImplementer` you load yourself. The
+[conformance document](https://github.com/ericmustin/otel-muzzle/blob/main/docs/policy-conformance.md) lists what is
+supported and where otel-muzzle differs from the specification.
 
 ## Forcing a verbose trace
 
