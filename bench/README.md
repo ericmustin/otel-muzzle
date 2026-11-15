@@ -170,9 +170,10 @@ Each run:
    measure of one variant, such as `email/muzzle-10/trace_bytes`. Every measure is spans or bytes per request or per
    trace, so smaller is better. `history.py` refuses a run whose checks failed, so the history holds only runs that
    passed them.
-3. **Records.** On `main` only, the action appends the numbers and the commit to `benchmarks/data.js` on the
+3. **Records.** On `main`, the action appends the numbers and the commit to `benchmarks/data.js` on the
    `benchmark-data` branch. When a number for a new commit is more than 20% above the previous commit's, it
    comments on the commit. Runs on the same commit add points to the history but are not compared with each other.
+   On a pull request the action runs without pushing or commenting, which tests the step.
 
 The `pages` workflow then publishes `site/index.html` with that `data.js` to GitHub Pages as the dashboard:
 
