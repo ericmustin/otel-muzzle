@@ -121,7 +121,9 @@ for name in $VARIANTS; do
   done
 
   log "variant ${name}: ${label}"
-  BENCH_PHASE=warmup compose up -d --wait --force-recreate otel-collector "${APPS[@]}"
+  # The Go control restarts with the services, or exports it retried across the collector restart land in this
+  # variant's numbers.
+  BENCH_PHASE=warmup compose up -d --wait --force-recreate otel-collector "${APPS[@]}" product-catalog
   compose run --rm -e RATE="$WARMUP_RATE" -e DURATION="$WARMUP_DURATION" -e HEADER_RATIO="$header_ratio" \
     -e SUMMARY_PATH="/out/${name}/k6-warmup.json" k6 run --quiet load/k6.js >/dev/null
   sleep "$FLUSH_WAIT"   # let warmup spans leave the SDK queues before measuring
@@ -130,7 +132,7 @@ for name in $VARIANTS; do
   compose run --rm -e RATE="$RATE" -e DURATION="$DURATION" -e HEADER_RATIO="$header_ratio" \
     -e SUMMARY_PATH="/out/${name}/k6-measure.json" k6 run --quiet load/k6.js
   sleep "$FLUSH_WAIT"
-  compose stop "${APPS[@]}" >/dev/null       # graceful shutdown flushes whatever is left
+  compose stop "${APPS[@]}" product-catalog >/dev/null   # graceful shutdown flushes whatever is left
   BENCH_PHASE=measure compose stop otel-collector >/dev/null
   compose logs --no-color otel-collector >"$RUN_DIR/$name/collector.log" 2>&1
   compose logs --no-color "${APPS[@]}" >"$RUN_DIR/$name/apps.log" 2>&1

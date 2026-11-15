@@ -104,7 +104,7 @@ set up the way the demo's is:
 ## How it is measured
 
 1. **Warmup and measurement are separate files.**
-   - For each variant, the three services are recreated and warmed up.
+   - For each variant, the three services and the Go control are recreated and warmed up.
    - The runner then waits past the SDKs' 5 s batch delay and restarts the collector on a new output file for the
      measured phase.
    - One-time spans, such as the first flagd connection, DNS lookups and gRPC channel setup, stay out of the numbers.
