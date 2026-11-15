@@ -6,6 +6,7 @@ import os
 import struct
 import tempfile
 import unittest
+from unittest import mock
 from collections import Counter
 
 import analyze
@@ -279,6 +280,14 @@ class EndToEnd(unittest.TestCase):
             self.assertRegex(text, rf"(?m)^\| {name} \| 25 \|")
         self.assertIn("iterations/s", text)
         self.assertIn("Request traces by type", text)
+
+    def test_a_spread_difference_is_reported_but_does_not_fail_the_run(self):
+        self.write_run([("baseline", "stock", 0), ("baseline-2", "stock", 0), ("muzzle-10", "muzzle", 0.1)])
+        with mock.patch("analyze_app.spread_failures", return_value=["view|client: 11.00 vs baseline 10.00"]):
+            results = build(self.run_dir)
+        muzzle = next(v for v in results["variants"] if v["name"] == "muzzle-10")
+        self.assertTrue(results["passed"], muzzle["checks"])
+        self.assertIn("view|client: 11.00 vs baseline 10.00", markdown(results))
 
     def test_markdown_with_only_stock_variants(self):
         self.write_run([("baseline", "stock", 0), ("baseline-2", "stock", 0)])
