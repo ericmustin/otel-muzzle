@@ -145,6 +145,7 @@ to four spans per request; services with ORM, middleware and HTTP-client instrum
 The payment row ran `otel-muzzle/register`, the entry point that the setup file has since replaced.
 
 Latest numbers: [bench/RESULTS.md](bench/RESULTS.md). Method and caveats: [bench/README.md](bench/README.md).
+Every scheduled run, over time: the [benchmark dashboard](https://ericmustin.github.io/otel-muzzle/).
 
 ### Real applications
 

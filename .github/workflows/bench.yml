@@ -1,0 +1,108 @@
+name: bench
+
+# Runs the benchmarks in bench/ and, on main, appends the results to the benchmark-data branch with
+# github-action-benchmark. The pages workflow publishes them. See bench/README.md, "Results over time".
+on:
+  schedule:
+    - cron: '17 3 * * *' # nightly: OpenTelemetry Demo
+    - cron: '17 5 * * 0' # Sundays: GitLab CE
+  workflow_dispatch:
+    inputs:
+      gitlab:
+        description: Run the GitLab CE benchmark instead (about 90 minutes)
+        type: boolean
+        default: false
+  pull_request:
+    paths:
+      - bench/**
+      - .github/workflows/bench.yml
+
+permissions:
+  contents: read
+
+concurrency:
+  group: bench-${{ github.ref }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+
+env:
+  LOCAL_ONLY: '1'
+  RUN_ID: ${{ github.run_id }}
+
+jobs:
+  otel-demo:
+    if: >-
+      github.event_name == 'pull_request' || github.event.schedule == '17 3 * * *'
+      || (github.event_name == 'workflow_dispatch' && !inputs.gitlab)
+    runs-on: ubuntu-24.04
+    timeout-minutes: 60
+    permissions:
+      contents: write # github-action-benchmark pushes to the benchmark-data branch and comments on alerts
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - run: make bench
+        env:
+          VARIANTS: baseline muzzle-0 muzzle-10 muzzle-100 header-10
+      - if: ${{ !cancelled() }}
+        run: cat "bench/out/$RUN_ID/results.md" >> "$GITHUB_STEP_SUMMARY"
+      - if: ${{ !cancelled() }}
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: otel-demo-${{ github.run_id }}
+          path: |
+            bench/out/${{ github.run_id }}/
+            !bench/out/${{ github.run_id }}/**/*.pb
+      - run: python3 bench/history.py "bench/out/$RUN_ID/results.json" > otel-demo.json
+      - if: github.ref == 'refs/heads/main'
+        uses: benchmark-action/github-action-benchmark@4322e5726e6334590d251fc4f92bec0efafc45dc # v1.22.2
+        with:
+          name: OpenTelemetry Demo
+          tool: customSmallerIsBetter
+          output-file-path: otel-demo.json
+          gh-pages-branch: benchmark-data
+          benchmark-data-dir-path: benchmarks
+          github-token: ${{ secrets.GITHUB_TOKEN }}
+          auto-push: true
+          summary-always: true
+          alert-threshold: '120%'
+          comment-on-alert: true
+          max-items-in-chart: 365
+
+  gitlab:
+    if: >-
+      github.event_name == 'pull_request' || github.event.schedule == '17 5 * * 0'
+      || (github.event_name == 'workflow_dispatch' && inputs.gitlab)
+    runs-on: ubuntu-24.04
+    timeout-minutes: 180
+    permissions:
+      contents: write # github-action-benchmark pushes to the benchmark-data branch and comments on alerts
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - run: make bench-gitlab
+      - if: ${{ !cancelled() }}
+        run: cat "bench/out/gitlab/$RUN_ID/results.md" >> "$GITHUB_STEP_SUMMARY"
+      - if: ${{ !cancelled() }}
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: gitlab-${{ github.run_id }}
+          path: |
+            bench/out/gitlab/${{ github.run_id }}/
+            !bench/out/gitlab/${{ github.run_id }}/**/*.pb
+      - run: python3 bench/history.py "bench/out/gitlab/$RUN_ID/results.json" > gitlab.json
+      - if: github.ref == 'refs/heads/main'
+        uses: benchmark-action/github-action-benchmark@4322e5726e6334590d251fc4f92bec0efafc45dc # v1.22.2
+        with:
+          name: GitLab CE
+          tool: customSmallerIsBetter
+          output-file-path: gitlab.json
+          gh-pages-branch: benchmark-data
+          benchmark-data-dir-path: benchmarks
+          github-token: ${{ secrets.GITHUB_TOKEN }}
+          auto-push: true
+          summary-always: true
+          alert-threshold: '120%'
+          comment-on-alert: true
+          max-items-in-chart: 104

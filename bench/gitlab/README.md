@@ -4,7 +4,9 @@ This benchmark measures how much trace data otel-muzzle removes from GitLab, a l
 its own OpenTelemetry tracing. It runs the same team workload against GitLab as shipped and with otel-muzzle
 added, and reports spans and OTLP bytes per request.
 
-The latest results are in [RESULTS.md](RESULTS.md). Everything runs in local Docker; no span leaves the machine.
+The latest results are in [RESULTS.md](RESULTS.md), and the weekly runs are on the
+[dashboard](https://ericmustin.github.io/otel-muzzle/#gitlab). Everything runs in local Docker; no span leaves the
+machine.
 
 ## Run it
 

@@ -14,7 +14,8 @@ protobuf and prefixed with its 4-byte big-endian length. Its size is the "bytes 
 For every service and trace it also checks otel-muzzle's rule: a trace keeps its INTERNAL spans exactly when
 the variant's ratio selects its trace id or its tracestate carries muzzle=verbose.
 
-Output: results.md, results.csv, and results.json in the run directory. Standard library only.
+Output: results.md, results.csv, and results.json in the run directory. Standard library only. The exit status is 1
+when a check fails: a lost server span, a dangling parent, a rule mismatch or a failed request.
 
 Usage:
     analyze.py <run-dir>                  write the reports
@@ -371,6 +372,24 @@ def rows(results: dict):
             }
 
 
+def failures(flat: list[dict]) -> list[str]:
+    """The integrity checks a run must pass to count as a result: one line per failure, none for a clean run."""
+    out = []
+    for r in flat:
+        where = f"{r['label']}, {r['service']}"
+        if not r["requests"]:
+            out.append(f"{where}: no requests")
+        elif r["server_spans"] != r["requests"]:
+            out.append(f"{where}: {r['server_spans']:,} server spans for {r['requests']:,} requests")
+        if r["dangling_parent_refs"]:
+            out.append(f"{where}: {r['dangling_parent_refs']:,} dangling parents")
+        if r["rule_mismatches"]:
+            out.append(f"{where}: {r['rule_mismatches']:,} rule mismatches")
+        if r["ok_rate"] != "" and r["ok_rate"] < 1:
+            out.append(f"{where}: {r['ok_rate']:.1%} of requests succeeded")
+    return out
+
+
 def _round(x, digits=2):
     return round(x, digits) if isinstance(x, (int, float)) else ""
 
@@ -547,13 +566,17 @@ def main(argv=None) -> int:
         writer = csv.DictWriter(fh, fieldnames=list(flat[0].keys()))
         writer.writeheader()
         writer.writerows(flat)
+    failed = failures(flat)
     with open(os.path.join(args.path, "results.json"), "w") as fh:
-        json.dump({"run": results["run"], "rows": flat}, fh, indent=2)
+        json.dump({"run": results["run"], "rows": flat, "passed": not failed, "failures": failed}, fh, indent=2)
     report = markdown(results)
+    if failed:
+        report += "\n".join(["", "**Some checks failed; these numbers are not a result.**\n",
+                             *(f"- {line}" for line in failed), ""])
     with open(os.path.join(args.path, "results.md"), "w") as fh:
         fh.write(report)
     print(report)
-    return 0
+    return 1 if failed else 0
 
 
 if __name__ == "__main__":

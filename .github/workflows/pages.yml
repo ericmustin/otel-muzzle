@@ -1,0 +1,47 @@
+name: pages
+
+# Publishes the benchmark dashboard (bench/site/) with the latest data.js from the benchmark-data branch.
+on:
+  push:
+    branches: [main]
+    paths:
+      - bench/site/**
+      - .github/workflows/pages.yml
+  workflow_run:
+    workflows: [bench]
+    types: [completed]
+    branches: [main]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: pages
+  cancel-in-progress: false
+
+jobs:
+  deploy:
+    if: github.event_name != 'workflow_run' || github.event.workflow_run.conclusion == 'success'
+    runs-on: ubuntu-24.04
+    permissions:
+      pages: write
+      id-token: write
+    environment:
+      name: github-pages
+      url: ${{ steps.deploy.outputs.page_url }}
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - name: Add the data
+        run: |
+          cp -R bench/site _site
+          if git fetch --depth=1 origin benchmark-data && git cat-file -e FETCH_HEAD:benchmarks/data.js; then
+            git show FETCH_HEAD:benchmarks/data.js > _site/data.js
+          fi
+      - uses: actions/upload-pages-artifact@fc324d3547104276b827a68afc52ff2a11cc49c9 # v5.0.0
+        with:
+          path: _site
+      - id: deploy
+        uses: actions/deploy-pages@368f82528645a54fb793d4d04e342629a3f51346 # v5.0.1

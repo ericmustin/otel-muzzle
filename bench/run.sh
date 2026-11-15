@@ -168,8 +168,13 @@ cat >"$RUN_DIR/run.json" <<EOF
 EOF
 
 log "analysing ${RUN_DIR}"
+status=0
 docker run --rm -u "${BENCH_UID}:${BENCH_GID}" -v "$PWD:/bench" -w /bench python:3.12-slim \
-  python analyze.py "$RUN_DIR" >/dev/null
+  python analyze.py "$RUN_DIR" >/dev/null || status=$?
 cp "$RUN_DIR/results.md" RESULTS.md
 cat "$RUN_DIR/results.md"
+if [[ "$status" != 0 ]]; then
+  log "some checks failed: see ${RUN_DIR}/results.md"
+fi
 log "done: ${RUN_DIR}/results.{md,csv,json}; latest copied to bench/RESULTS.md"
+exit "$status"
