@@ -38,14 +38,15 @@ log() { printf '\n[bench-gitlab %s] %s\n' "$(date +%H:%M:%S)" "$*"; }
 # k6_run SCRIPT [docker compose run options]
 k6_run() { local script="$1"; shift; docker compose --profile load run --rm "$@" k6 run --quiet "/bench/${script}"; }
 
-# The readiness check can pass before every Puma worker serves: wait until the API answers for the seeded project.
-api_ready() {
+# Each start of the container runs gitlab-ctl reconfigure, which restarts Workhorse at its end, after the readiness
+# check has passed; requests then get a 502. Wait for reconfigure to finish and the sign-in page to answer.
+gitlab_ready() {
   for _ in $(seq 60); do
-    docker compose exec -T gitlab curl -fs -o /dev/null -H "PRIVATE-TOKEN: ${BENCH_TOKEN}" \
-      "http://localhost/api/v4/projects/root%2Fsinatra" && return 0
+    docker compose exec -T gitlab sh -c '! pgrep -f "[c]inc-client|[c]hef-client" >/dev/null \
+      && curl -fs -o /dev/null http://localhost/users/sign_in' && return 0
     sleep 5
   done
-  log "GitLab's API did not answer within 5 minutes"
+  log "GitLab was not ready 5 minutes after its readiness check passed"
   return 1
 }
 
@@ -72,6 +73,7 @@ mkdir -p "$RUN_DIR/_setup"
 export BENCH_VARIANT=_setup BENCH_PHASE=setup GITLAB_IMAGE=muzzle-bench/gitlab:stock OTEL_MUZZLE_VERBOSE_RATIO=0
 log "starting GitLab ${GITLAB_VERSION} (a first boot takes several minutes)"
 docker compose up -d --wait otel-collector gitlab
+gitlab_ready
 log "seeding root/sinatra from Sinatra ${SEED_TAG}"
 docker compose exec -T -e BENCH_TOKEN -e OTEL_SDK_DISABLED=true gitlab gitlab-rails runner /bench/setup.rb   # untraced
 sleep 60   # each GitLab process caches application settings for 60 s; the push below must see Auto DevOps off
@@ -87,7 +89,7 @@ for name in $VARIANTS; do
 
   log "variant ${name}: ${label}"
   BENCH_PHASE=warmup docker compose up -d --wait --force-recreate otel-collector gitlab
-  api_ready
+  gitlab_ready
   k6_run k6.js -e RATE="$WARMUP_RATE" -e DURATION="$WARMUP_DURATION" -e HEADER_RATIO="$header_ratio" \
     -e SUMMARY_PATH="/out/${name}/k6-warmup.json" >/dev/null
   sleep "$FLUSH_WAIT"   # let warmup spans leave the SDK queues before measuring
