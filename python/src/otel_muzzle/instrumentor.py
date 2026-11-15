@@ -22,14 +22,15 @@ __all__ = ["MuzzleInstrumentor"]
 class MuzzleInstrumentor(BaseInstrumentor):
     """Calls ``otel_muzzle.install()``. ``OTEL_PYTHON_DISABLED_INSTRUMENTATIONS=muzzle`` turns it off.
 
-    Under ``opentelemetry-instrument`` the ratio comes from ``OTEL_MUZZLE_VERBOSE_RATIO``.
+    Under ``opentelemetry-instrument`` the ratio comes from ``OTEL_MUZZLE_VERBOSE_RATIO``, and a policy file from
+    ``OTEL_MUZZLE_POLICY_FILE``.
     """
 
     def instrumentation_dependencies(self) -> Collection[str]:
         return _instruments
 
     def _instrument(self, **kwargs: Any) -> None:
-        install(ratio=kwargs.get("ratio"))
+        install(ratio=kwargs.get("ratio"), policy_file=kwargs.get("policy_file"))
 
     def _uninstrument(self, **kwargs: Any) -> None:
         # Stops wrapping: every tracer gets its own sampler back the next time it starts a span. The start_span patch

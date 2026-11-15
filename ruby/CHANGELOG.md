@@ -8,5 +8,6 @@
 * ADDED: `Otel::Muzzle.install!` for applications without `opentelemetry-instrumentation-base`
 * ADDED: `OTEL_MUZZLE_VERBOSE_RATIO` and the `ratio` option, the share of traces kept verbose (default 0.1)
 * ADDED: The `muzzle=verbose` tracestate member, which forces a verbose trace
+* ADDED: Policy mode (experimental): `OTEL_MUZZLE_POLICY_FILE` and the `policy_file` option read OpenTelemetry Telemetry Policy span sampling policies from a file, which then replace the built-in rule; `Otel::Muzzle::Policy.reload` reads the file again
 
 <!-- markdownlint-disable-file MD001 -->

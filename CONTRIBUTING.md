@@ -70,6 +70,7 @@ make test-js JS_SDK=2 NODE_IMAGE=node:20   # the latest SDK 2.x on Node.js 20
 make e2e                   # the example stack in Docker, with the SDK set up in code
 make e2e MODE=zerocode     # or MODE=operator
 make e2e-delegate          # the configured sampler's DROP wins in every language
+make e2e POLICY=1          # policy mode with examples/policies/muzzle.json; any MODE
 make bench-quick           # a short run of the OpenTelemetry Demo benchmark
 ```
 
@@ -102,4 +103,12 @@ regenerate the files and commit them with it:
 
 ```sh
 python3 testdata/generate_ratio_vectors.py
+```
+
+The four `testdata/policy_*_vectors.json` files hold the policy mode cases: thresholds, the `ot` tracestate member,
+the regex subset, and decisions. `testdata/generate_policy_vectors.py` writes them the same way, and reads
+`examples/policies/muzzle.json` for the example policy's cases:
+
+```sh
+python3 testdata/generate_policy_vectors.py
 ```

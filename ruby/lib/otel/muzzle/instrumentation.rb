@@ -11,6 +11,9 @@ module Otel
     # - `ratio` (Numeric within [0, 1], default nil): the share of traces kept verbose. nil reads
     #   OTEL_MUZZLE_VERBOSE_RATIO. OTEL_RUBY_INSTRUMENTATION_MUZZLE_CONFIG_OPTS cannot set it, because its
     #   validator is a callable; use OTEL_MUZZLE_VERBOSE_RATIO instead.
+    # - `policy_file` (String, default nil): a file of span sampling policies to decide with instead of the built-in
+    #   rule (policy mode, experimental; see {Policy}). nil reads OTEL_MUZZLE_POLICY_FILE.
+    #   OTEL_RUBY_INSTRUMENTATION_MUZZLE_CONFIG_OPTS can set it: `policy_file=/etc/otel/policy.json`.
     #
     # @example
     #   OpenTelemetry::SDK.configure do |c|
@@ -24,7 +27,7 @@ module Otel
       instrumentation_version VERSION
 
       install do |config|
-        Muzzle.install!(ratio: config[:ratio])
+        Muzzle.install!(ratio: config[:ratio], policy_file: config[:policy_file])
       end
 
       present do
@@ -36,6 +39,7 @@ module Otel
       end
 
       option :ratio, default: nil, validate: ->(ratio) { Sampler.valid_ratio?(ratio) }
+      option :policy_file, default: nil, validate: :string
 
       private
 

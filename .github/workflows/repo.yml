@@ -22,4 +22,4 @@ jobs:
       - run: make test-verify
       - run: make test-bench
       - run: npm ci --prefix js
-      - run: npx --prefix js markdownlint-cli2 --config js/.markdownlint-cli2.jsonc README.md CONTRIBUTING.md docs/design.md ruby/README.md ruby/CHANGELOG.md python/README.md python/CHANGELOG.md
+      - run: npx --prefix js markdownlint-cli2 --config js/.markdownlint-cli2.jsonc README.md CONTRIBUTING.md docs/design.md docs/policy-conformance.md ruby/README.md ruby/CHANGELOG.md python/README.md python/CHANGELOG.md

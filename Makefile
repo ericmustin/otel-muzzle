@@ -1,4 +1,4 @@
-.PHONY: test check-spdx test-python test-js test-ruby test-verify test-bench e2e e2e-ruby e2e-zerocode e2e-operator e2e-delegate up down clean bench bench-quick bench-down bench-gitlab bench-gitlab-down
+.PHONY: test check-spdx test-python test-js test-ruby test-verify test-bench e2e e2e-ruby e2e-zerocode e2e-operator e2e-delegate e2e-policy up down clean bench bench-quick bench-down bench-gitlab bench-gitlab-down
 
 test: check-spdx test-python test-js test-ruby test-verify test-bench
 
@@ -52,7 +52,9 @@ test-bench:
 # code (the app configures the SDK), zerocode (the zero-code loaders), operator (the Operator's images and
 # environment, simulated in compose). The exit code is the verifier's; the stack is torn down either way.
 MODE ?= code
-COMPOSE = docker compose -f docker-compose.yml $(if $(filter-out code,$(MODE)),-f examples/compose/$(MODE).yml)
+# POLICY=1 runs the apps in policy mode with examples/policies/muzzle.json (examples/compose/policy.yml), in any MODE.
+COMPOSE = docker compose -f docker-compose.yml $(if $(filter-out code,$(MODE)),-f examples/compose/$(MODE).yml) \
+	$(if $(POLICY),-f examples/compose/policy.yml)
 DOWN = $(COMPOSE) --profile e2e down -v --remove-orphans
 # The end-to-end test is `docker compose run --rm --build verifier` (see docker-compose.yml): it builds what changed,
 # starts the stack and waits for the apps to be healthy, runs the scenarios, and exits with the verifier's status.
@@ -83,6 +85,10 @@ e2e-delegate:
 
 e2e-operator:
 	$(MAKE) e2e MODE=operator
+
+# Policy mode: the apps decide by the span sampling policy in examples/policies/muzzle.json. Any MODE works.
+e2e-policy:
+	$(MAKE) e2e MODE=$(MODE) POLICY=1
 
 # The stack without the verifier, for trying requests and looking at traces.
 up:

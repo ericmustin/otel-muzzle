@@ -18,8 +18,15 @@ from opentelemetry.sdk.trace.export.in_memory_span_exporter import InMemorySpanE
 from opentelemetry.test.globals_test import reset_trace_globals
 
 from otel_muzzle import _patch
+from otel_muzzle.policy import _runtime
 
-MUZZLE_ENV = ("OTEL_MUZZLE_VERBOSE_RATIO", "OTEL_SDK_DISABLED", "OTEL_TRACES_SAMPLER", "OTEL_TRACES_SAMPLER_ARG")
+MUZZLE_ENV = (
+    "OTEL_MUZZLE_POLICY_FILE",
+    "OTEL_MUZZLE_VERBOSE_RATIO",
+    "OTEL_SDK_DISABLED",
+    "OTEL_TRACES_SAMPLER",
+    "OTEL_TRACES_SAMPLER_ARG",
+)
 
 
 @pytest.fixture(autouse=True)
@@ -31,8 +38,10 @@ def _isolate_globals(monkeypatch: pytest.MonkeyPatch) -> Iterator[None]:
     # uninstall() leaves the class-level patch in place by design, so put the SDK's own start_span back.
     monkeypatch.setattr(Tracer, "start_span", Tracer.start_span)
     reset_trace_globals()
+    _runtime.reset()
     yield
     _patch.uninstall()
+    _runtime.reset()
     reset_trace_globals()
 
 

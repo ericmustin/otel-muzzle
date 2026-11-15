@@ -86,6 +86,22 @@ The operator setup reproduces what the OpenTelemetry Operator does to a pod, wit
 copies the language's auto-instrumentation image into a shared volume, and the app's environment points the
 runtime at it, using the same variables the Operator sets.
 
+## Policy mode
+
+`examples/compose/policy.yml` is a fourth override file, used on top of any of the three setups. It mounts
+`examples/policies/` into the apps and sets `OTEL_MUZZLE_POLICY_FILE=/policy/muzzle.json`, so each app decides by
+the span sampling policy in [policies/muzzle.json](policies/muzzle.json) instead of the built-in rule.
+
+```sh
+make e2e POLICY=1                  # or make e2e-policy
+make e2e MODE=zerocode POLICY=1
+```
+
+The verifier reads the same file. It selects trace ids by the policy's threshold, the last 14 hex characters at or
+above `e6660000000000`, and sends a fifth request: a trace id the policy selects, plus
+`tracestate: ot=rv:00000000000000`. That explicit randomness value replaces the trace id in every app, so the trace
+must be lean, and every downstream app must have received the member.
+
 ## Example backends
 
 [backends/elastic](backends/elastic/README.md) sends the same traces to Elastic Observability, with otel-muzzle off and on.
@@ -129,7 +145,8 @@ trace 474b1af7167cbffa42e06178234b5119: 14 spans, expected lean
 PASS
 ```
 
-It ends with a summary, then `ALL PASS` (exit 0) or `N of 4 scenarios FAILED` (exit 1).
+It ends with a summary, then `ALL PASS` (exit 0) or `N of 4 scenarios FAILED` (exit 1). In policy mode there are
+five scenarios.
 
 `make e2e-delegate` checks that the sampler you configure keeps the final say. The apps run
 `OTEL_TRACES_SAMPLER=parentbased_traceidratio` with `OTEL_TRACES_SAMPLER_ARG=0`, which drops every new trace.

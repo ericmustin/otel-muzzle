@@ -21,7 +21,7 @@ import otel_muzzle
 from otel_muzzle import MuzzleSampler, _patch
 from otel_muzzle.instrumentor import MuzzleInstrumentor
 from otel_muzzle.package import _instruments
-from tests.helpers import by_name, remote_parent, sdk_tracer
+from tests.helpers import EXAMPLE_POLICY, by_name, remote_parent, sdk_tracer
 
 
 @pytest.fixture(autouse=True)
@@ -104,6 +104,12 @@ class TestInstrumentor:
         sampler = started_sampler(provider())
         assert isinstance(sampler, MuzzleSampler)
         assert sampler.ratio == 0.5
+
+    def test_instrument_passes_the_policy_file_on(self, provider: Callable[..., TracerProvider]) -> None:
+        MuzzleInstrumentor().instrument(policy_file=str(EXAMPLE_POLICY))
+        sampler = started_sampler(provider())
+        assert isinstance(sampler, MuzzleSampler)
+        assert sampler.ratio is None and sampler.policies is not None and sampler.policies.active
 
     def test_uninstrument_stops_wrapping_and_keeps_the_patch(self, provider: Callable[..., TracerProvider]) -> None:
         tracer_provider = provider()

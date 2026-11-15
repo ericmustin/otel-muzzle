@@ -9,6 +9,7 @@ import {
   type Context,
   type Link,
   type SpanContext,
+  type TraceState,
 } from '@opentelemetry/api';
 import type { Sampler, SamplingResult } from '@opentelemetry/sdk-trace';
 import { MUZZLE_SAMPLER } from './internal-types';
@@ -17,6 +18,13 @@ import {
   ParentBasedSampler,
   SamplingDecision,
 } from './load-sdk-trace';
+import {
+  fromFile,
+  policyFileFromEnv,
+  type PolicyRuntime,
+} from './policy/runtime';
+import type { SpanSamplingImplementer } from './policy/span-sampling';
+import { eraseTh } from './policy/threshold';
 import { samplerFromEnv } from './sampler-from-env';
 import type { MuzzleSamplerOptions } from './types';
 import { logger } from './utils';
@@ -38,16 +46,25 @@ const SURROUNDING_ASCII_WHITESPACE = /^[ \t\n\v\f\r]+|[ \t\n\v\f\r]+$/g;
  *
  * The sampler only decides. Without `installMuzzle()`, the children of a dropped span point at a parent that is
  * never exported.
+ *
+ * In policy mode the rule above is replaced by span sampling policies: a span the delegate records is dropped when
+ * the policies that match it say so, and kept otherwise. Policy mode is on when `policies` or `policyFile` is
+ * given, or when `OTEL_MUZZLE_POLICY_FILE` names a file. The ratio is then ignored.
  */
 export class MuzzleSampler implements Sampler {
   public readonly delegate: Sampler;
-  public readonly ratio: number;
+  /** The verbose ratio of the built-in rule. Undefined in policy mode. */
+  public readonly ratio: number | undefined;
+  /** The span sampling policies that decide in policy mode. Undefined otherwise. */
+  public readonly policies: SpanSamplingImplementer | undefined;
   private readonly _ratioThreshold: number;
   /** Configuration warnings, logged on the first sampling decision, when `diag` is set up. */
   private _pendingWarnings: string[] | undefined = [];
+  /** The policy file's runtime, which holds its own warnings for the first sampling decision. */
+  private readonly _policyRuntime: PolicyRuntime | undefined;
 
   constructor(options: MuzzleSamplerOptions = {}) {
-    const { delegate, ratio } = options;
+    const { delegate, ratio, policies, policyFile } = options;
     if (ratio !== undefined && !isRatio(ratio)) {
       const message = `otel-muzzle: ratio must be a number within [0, 1], got ${
         typeof ratio === 'string' ? JSON.stringify(ratio) : String(ratio)
@@ -56,14 +73,28 @@ export class MuzzleSampler implements Sampler {
         ? new RangeError(message)
         : new TypeError(message);
     }
+    if (policyFile != null && typeof policyFile !== 'string') {
+      throw new TypeError(
+        `otel-muzzle: policyFile must be a string, got ${String(policyFile)}`
+      );
+    }
     const warnings = this._pendingWarnings!;
     const warn = (message: string) => void warnings.push(message);
     this.delegate =
       delegate ??
       samplerFromEnv(process.env, warn) ??
       new ParentBasedSampler({ root: new AlwaysOnSampler() });
-    this.ratio = ratio ?? ratioFromEnv(process.env, warn);
-    this._ratioThreshold = Math.floor(this.ratio * 2 ** 32);
+    if (policies == null) {
+      const path = policyFile || policyFileFromEnv();
+      if (path !== undefined) this._policyRuntime = fromFile(path);
+    }
+    this.policies = policies ?? this._policyRuntime?.policies;
+    if (this.policies === undefined) {
+      this.ratio = ratio ?? ratioFromEnv(process.env, warn);
+    } else if (ratio !== undefined) {
+      warn(`ratio ${ratio} is ignored in policy mode`);
+    }
+    this._ratioThreshold = Math.floor((this.ratio ?? 0) * 2 ** 32);
   }
 
   public shouldSample(
@@ -85,6 +116,25 @@ export class MuzzleSampler implements Sampler {
     );
     if (result.decision === SamplingDecision.NOT_RECORD) return result;
     const parent = trace.getSpanContext(context);
+    const policies = this.policies;
+    if (policies !== undefined) {
+      // The tracestate the span would get: the delegate's, or else the parent's.
+      const traceState = result.traceState ?? parent?.traceState;
+      return policies.keep(
+        traceId,
+        spanName,
+        spanKind,
+        parent,
+        traceState,
+        attributes
+      )
+        ? result
+        : // A dropped span carries no sampling threshold, so that nothing downstream samples by one.
+          {
+            decision: SamplingDecision.NOT_RECORD,
+            traceState: withoutTh(traceState),
+          };
+    }
     if (this._keep(parent, traceId, spanKind)) return result;
     return {
       decision: SamplingDecision.NOT_RECORD,
@@ -93,7 +143,9 @@ export class MuzzleSampler implements Sampler {
   }
 
   public toString(): string {
-    return `MuzzleSampler{ratio=${this.ratio}, delegate=${this.delegate.toString()}}`;
+    const mode =
+      this.policies !== undefined ? 'mode=policy' : `ratio=${this.ratio}`;
+    return `MuzzleSampler{${mode}, delegate=${this.delegate.toString()}}`;
   }
 
   public get [MUZZLE_SAMPLER](): boolean {
@@ -106,6 +158,7 @@ export class MuzzleSampler implements Sampler {
     if (warnings === undefined) return;
     this._pendingWarnings = undefined;
     for (const message of warnings) logger.warn(message);
+    this._policyRuntime?.flushWarnings();
   }
 
   /**
@@ -151,6 +204,17 @@ export function isMuzzleSampler(sampler: unknown): boolean {
     sampler !== null &&
     (sampler as Record<symbol, unknown>)[MUZZLE_SAMPLER] === true
   );
+}
+
+/** Returns `traceState` without the `th` sub-key of its `ot` member; `traceState` itself when it has none. */
+function withoutTh(traceState: TraceState | undefined): TraceState | undefined {
+  const ot = traceState?.get('ot');
+  if (traceState === undefined || ot === undefined) return traceState;
+  const erased = eraseTh(ot);
+  if (erased === ot) return traceState;
+  return erased === undefined
+    ? traceState.unset('ot')
+    : traceState.set('ot', erased);
 }
 
 /** Returns `OTEL_MUZZLE_VERBOSE_RATIO`, or 0.1 when it is unset or blank. An invalid value is reported to `warn` and ignored. */

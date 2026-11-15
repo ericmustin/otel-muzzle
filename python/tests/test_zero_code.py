@@ -18,7 +18,14 @@ from typing import Any
 
 import pytest
 
-from tests.helpers import LOUD_TRACE_ID, QUIET_TRACE_ID, REMOTE_SPAN_ID
+from tests.helpers import (
+    EXAMPLE_POLICY,
+    LOUD_TRACE_ID,
+    POLICY_DROP_TRACE_ID,
+    POLICY_KEEP_TRACE_ID,
+    QUIET_TRACE_ID,
+    REMOTE_SPAN_ID,
+)
 
 INSTRUMENT = Path(sys.executable).with_name("opentelemetry-instrument")
 
@@ -137,6 +144,23 @@ class TestZeroCode:
         assert report["sampler"].startswith("MuzzleSampler{ratio=0.1, ")
         assert stderr.count('otel-muzzle: OTEL_MUZZLE_VERBOSE_RATIO must be a number within [0, 1], got "lots"') == 1
         assert_reparented(spans)
+
+    def test_the_policy_file_reaches_zero_code(self, tmp_path: Path) -> None:
+        report, spans, stderr = run(
+            tmp_path, trace_id=POLICY_DROP_TRACE_ID, OTEL_MUZZLE_POLICY_FILE=str(EXAMPLE_POLICY)
+        )
+        assert report["sampler"].startswith("MuzzleSampler{mode=policy, delegate=ParentBased{root:AlwaysOnSampler,")
+        assert_reparented(spans)
+        assert "otel-muzzle" not in stderr
+        _, spans, _ = run(tmp_path, trace_id=POLICY_KEEP_TRACE_ID, OTEL_MUZZLE_POLICY_FILE=str(EXAMPLE_POLICY))
+        assert sorted(spans) == ["GET /", "GET upstream", "work"]
+
+    def test_an_unreadable_policy_file_is_logged_once_and_drops_nothing(self, tmp_path: Path) -> None:
+        missing = tmp_path / "missing.json"
+        report, spans, stderr = run(tmp_path, trace_id=POLICY_DROP_TRACE_ID, OTEL_MUZZLE_POLICY_FILE=str(missing))
+        assert report["sampler"].startswith("MuzzleSampler{mode=policy, ")
+        assert sorted(spans) == ["GET /", "GET upstream", "work"]
+        assert stderr.count(f"otel-muzzle: cannot load the policy file {missing}") == 1
 
     @pytest.mark.parametrize("disabled", ["muzzle", "flask, muzzle"])
     def test_disabled_instrumentations_turns_it_off(self, tmp_path: Path, disabled: str) -> None:

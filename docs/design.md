@@ -211,6 +211,144 @@ What happens when install is called before an SDK exists depends on the language
   nothing for a tracer without a `MuzzleSampler`, and the application's own `MuzzleSampler`, or one still in use on
   another thread, needs it to keep traces connected.
 
+## Policy mode
+
+Policy mode replaces the built-in rule with span sampling policies from the OpenTelemetry Telemetry Policy
+specification, read from a file. It is experimental: the specification is a draft, followed here as of
+opentelemetry-proto commit `04be8b6cf9649852ce5028dacbc9fb6cc00bd8a2`. [policy-conformance.md](policy-conformance.md)
+lists what is supported and where the packages differ from the specification. The patch is the same in both modes,
+and without a policy file nothing in this section applies.
+
+| | Ruby | Python | Node.js |
+|---|---|---|---|
+| Policy file, in code | `Otel::Muzzle.install!(policy_file:)`, `Sampler.new(policy_file:)`, instrumentation option `policy_file` | `otel_muzzle.install(policy_file=)`, `MuzzleSampler(policy_file=)` | `new MuzzleSampler({ policyFile })` |
+| Policies | `Otel::Muzzle::Policy::SpanSampling` | `otel_muzzle.policy.span_sampling.SpanSamplingImplementer` | `SpanSamplingImplementer` (`js/src/policy/span-sampling.ts`) |
+| File provider | `Otel::Muzzle::Policy::FileProvider` | `otel_muzzle.policy.provider.FilePolicyProvider` | `FilePolicyProvider` (`js/src/policy/file-provider.ts`) |
+| Reload every file in use | `Otel::Muzzle::Policy.reload` | `otel_muzzle.policy.reload()` | `reloadPolicies()` |
+
+Shared across all three:
+
+| | |
+|---|---|
+| Policy file setting | `OTEL_MUZZLE_POLICY_FILE`: the path of a policy file. Blank means unset. A policy file given in code wins. |
+| Ratio in policy mode | Unused. A non-blank `OTEL_MUZZLE_VERBOSE_RATIO` logs one warning. A ratio given in code is still checked, then logged and ignored. |
+| Sampler description | `MuzzleSampler{mode=policy, delegate=<delegate's description>}` |
+| Example policy | `examples/policies/muzzle.json`: the built-in rule as a policy |
+| Test vectors | `testdata/policy_threshold_vectors.json`, `policy_tracestate_vectors.json`, `policy_regex_vectors.json` and `policy_decision_vectors.json`, written by `testdata/generate_policy_vectors.py` |
+
+**Components.** They follow the OTEP's and the upstream Python prototype's split. A *file provider* reads the file
+and hands the parsed set to a *store*, which hands it to the *implementer* and keeps one apply status per policy.
+The implementer compiles the span sampling policies and answers the sampler. A new set replaces the previous one in
+a single assignment, so a sampler deciding on another thread sees the old set or the new one, never a mix. One file
+has one provider, store and implementer per process, shared by every sampler.
+
+**Policy file.** The Protobuf JSON form of `PolicySet`. Keys are lowerCamelCase or the proto's snake_case, enum
+values are names, and 64-bit integers and doubles may be strings. The example:
+
+```json
+{
+  "policies": [
+    {
+      "id": "drop-internal-spans",
+      "spanSampling": {
+        "matches": [
+          { "target": { "recordField": "SPAN_RECORD_FIELD_KIND" },
+            "predicate": { "equals": { "stringValue": "INTERNAL" } } },
+          { "target": { "recordField": "SPAN_RECORD_FIELD_PARENT_SPAN_ID" },
+            "predicate": { "exists": {} } },
+          { "target": { "recordField": "SPAN_RECORD_FIELD_TRACE_STATE" },
+            "predicate": { "regex": "(^|,)\\s*muzzle=verbose\\s*(,|$)" }, "negate": true }
+        ],
+        "sampling": { "percentage": 10, "mode": "SAMPLING_MODE_PROPORTIONAL" }
+      }
+    }
+  ]
+}
+```
+
+It matches INTERNAL spans that have a parent in traces without `muzzle=verbose`, and keeps them in 10% of the
+traces head sampling keeps.
+
+### Decision
+
+```text
+should_sample(parent_context, trace_id, name, kind, attributes, links):
+  parent = span_context(current_span(parent_context))
+  result = delegate.should_sample(<the same arguments, unchanged>)
+  if result is not recording:  return result              # the delegate's DROP always wins
+  state = result.tracestate, or parent.tracestate when the result has none
+  if policies.keep(trace_id, name, kind, parent, state, attributes):  return result
+  return DROP with tracestate = state without the th sub-key of its ot member
+
+keep(span):
+  (rv, arriving) = parse_ot(state["ot"])
+  R = rv, or trace-id bytes 9-15 when there is no rv       # 56 bits of randomness
+  if arriving is set and R < arriving:  arriving = unset   # inconsistent with the randomness
+  T = unset
+  for each enabled, valid span sampling policy whose matchers all match the span:
+    t = policy.threshold
+    if arriving is set:
+      if policy.mode is PROPORTIONAL:
+        t = threshold((2**56 - arriving) / 2**56 * policy.percentage / 100, policy.precision)
+      t = max(t, arriving)                                  # a threshold is never lowered
+    T = max(T, t)                                           # the most restrictive policy wins
+  return T is unset or R >= T                               # no matching policy: the span passes through
+```
+
+Every span is evaluated, not only roots. The decision is one per trace for a given policy, because `R` belongs to
+the trace: either every span a policy matches is kept, or none is. Every service computes the same `R`, so the
+services of a trace agree without propagating anything. The sampler writes no `th`; see the conformance document
+for why.
+
+**Threshold.** `threshold(p, precision)` is `2**56` for `p = 0` (keep nothing) and `0` for `p = 1`. Otherwise it is
+`2**56 - round(p * 2**56)`, rounded half up to `precision` hexadecimal digits counted after the leading `f` digits,
+and to 14 digits at most. `p = m * 2**e` with `0.5 <= m < 1` has `floor(-e / 4)` leading `f` digits. Every step
+is exact in double precision and integer arithmetic, so the three languages agree: 10% at the default precision of
+4 is `e6660000000000`, and 1% is `fd70a000000000`.
+
+**`ot` member.** `th` is 1 to 14 lowercase hexadecimal digits, padded with zeros on the right. `rv` is exactly 14.
+An invalid sub-key reads as absent, a repeated one takes its last value, and a member longer than 256 characters
+is not read.
+
+**Matchers.** A policy matches a span when every matcher does; `negate` inverts one matcher.
+
+| Target | Value |
+|---|---|
+| `SPAN_RECORD_FIELD_NAME` | the name at start |
+| `SPAN_RECORD_FIELD_TRACE_ID` | 32 lowercase hexadecimal characters |
+| `SPAN_RECORD_FIELD_PARENT_SPAN_ID` | 16 lowercase hexadecimal characters; empty for a root span |
+| `SPAN_RECORD_FIELD_TRACE_STATE` | `state` above as `key=value` members joined by commas; empty when there are none |
+| `SPAN_RECORD_FIELD_KIND` | the uppercase kind name; a missing kind reads `INTERNAL` |
+| `span_attribute` | the start attribute at the path, each segment a map key; absent when there is none |
+
+A record field is text. `exists` is true when the text is not empty, and the other predicates read the text. An
+absent attribute matches no predicate, so only a negated matcher is true for it.
+
+| Predicate | True when |
+|---|---|
+| `exists` | the value is present |
+| `equals` | the value has the same type and value; an integer and a double compare by exact numeric value, and a boolean is never a number |
+| `regex` | the value is a string and the pattern matches anywhere in it |
+| `gt`, `gte`, `lt`, `lte` | the value is a number and compares so, exactly; NaN never does |
+| `contains` | the value is an array with an equal element, or a string that holds the given string |
+
+**Statuses.** Loading a set yields one status per policy, in document order: applied, or not applied with the
+reason and where in the policy it is, such as `matches[1].target`. Each policy that is not applied logs one
+warning. Applied: a valid span sampling policy, and a disabled policy, which is then absent. Not applied: an
+invalid policy, a policy that uses an unsupported selector, and a policy of another type.
+
+**Failing open.** Nothing in policy mode drops a span unless a valid policy says so:
+
+- a file that cannot be read, is not JSON or is not a policy set leaves no policy in effect and logs one warning
+  that names the file; the built-in rule does not come back;
+- a reload that fails keeps the previous set;
+- an invalid policy stays inert and the others apply;
+- a policy that raises while it is evaluated matches nothing for that span, and logs one warning per policy.
+
+**Install.** `OTEL_SDK_DISABLED=true` returns before any file is read, where the language's install checks it. A
+second install with another policy file, or with a policy file after a plain install, logs a warning and changes
+nothing, as for a second ratio.
+
 ## Dependencies
 
 The rule: a package depends only on what it cannot run without, and never pulls in a second copy of
@@ -332,6 +470,22 @@ Each package's own suite covers these, in that language's test framework:
   - the ignored-ratio warning;
   - loading without the optional pieces.
 
+- **Policy mode:**
+  - all four `testdata/policy_*_vectors.json` files: thresholds, the `ot` member, the regex subset, and decisions
+    through the real sampler, with the tracestate of every drop;
+  - the apply status of every policy in the decision vectors' sets;
+  - both key spellings, every scalar type, and errors that name their location;
+  - a duplicate id, a disabled policy, another policy type, and an unsupported selector;
+  - the delegate's DROP winning, a kept span returning the delegate's result unchanged, and the built-in rule
+    not applying;
+  - a file that cannot be read, a reload, and a reload that fails;
+  - the policy file from the environment and in code, the ignored ratio with its warning, and
+    `OTEL_SDK_DISABLED=true` reading no file;
+  - through a real tracer with the example policy: SERVER → INTERNAL → INTERNAL → CLIENT exporting SERVER and
+    CLIENT with the CLIENT span under the SERVER span, and every span for a selected trace id and for
+    `muzzle=verbose`;
+  - the zero-code path with `OTEL_MUZZLE_POLICY_FILE`, where the language has one.
+
 The end-to-end test (`make e2e`, `MODE=code|zerocode|operator`) sends one request through a Ruby, a Node.js and a
 Python service, each writing to Postgres and calling the next. `examples/verify.py` checks four scenarios:
 
@@ -340,6 +494,11 @@ Python service, each writing to Postgres and calling the next. `examples/verify.
 2. the same plus `tracestate: muzzle=verbose`: every span in every service;
 3. an id the ratio selects: every span in every service, which shows the three languages agree;
 4. no `traceparent`: a connected tree whose verbosity matches what the new id implies.
+
+With `POLICY=1` the apps run in policy mode with `examples/policies/muzzle.json`, the verifier selects trace ids by
+the policy's threshold instead of the ratio, and a fifth scenario sends an id the policy selects together with
+`tracestate: ot=rv:00000000000000`: no INTERNAL spans in any service, which shows that all three read `rv` and
+that it propagates.
 
 The benchmark (`bench/`) runs the stock OpenTelemetry Demo services for each language with and without the
 package and reports spans and OTLP bytes per request and per trace.

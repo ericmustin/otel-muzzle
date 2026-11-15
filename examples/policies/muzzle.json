@@ -1,0 +1,27 @@
+{
+  "policies": [
+    {
+      "id": "drop-internal-spans",
+      "name": "Drop INTERNAL spans outside verbose traces",
+      "description": "Keeps INTERNAL spans that have a parent in 10% of the traces head sampling keeps, and in any trace whose tracestate carries muzzle=verbose.",
+      "spanSampling": {
+        "matches": [
+          {
+            "target": { "recordField": "SPAN_RECORD_FIELD_KIND" },
+            "predicate": { "equals": { "stringValue": "INTERNAL" } }
+          },
+          {
+            "target": { "recordField": "SPAN_RECORD_FIELD_PARENT_SPAN_ID" },
+            "predicate": { "exists": {} }
+          },
+          {
+            "target": { "recordField": "SPAN_RECORD_FIELD_TRACE_STATE" },
+            "predicate": { "regex": "(^|,)\\s*muzzle=verbose\\s*(,|$)" },
+            "negate": true
+          }
+        ],
+        "sampling": { "percentage": 10, "mode": "SAMPLING_MODE_PROPORTIONAL" }
+      }
+    }
+  ]
+}

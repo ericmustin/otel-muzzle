@@ -1,5 +1,6 @@
 // SPDX-License-Identifier: Apache-2.0
 
+import { readFileSync } from 'node:fs';
 import * as path from 'node:path';
 import {
   context,
@@ -46,6 +47,27 @@ export const RATIO_ENV_VECTORS = path.resolve(
   PACKAGE_DIR,
   '../testdata/ratio_env_vectors.json'
 );
+/** The shipped example policy: the built-in rule as a span sampling policy at 10%. */
+export const EXAMPLE_POLICY = path.resolve(
+  PACKAGE_DIR,
+  '../examples/policies/muzzle.json'
+);
+/** The last 14 hex characters are all f: policy mode keeps the trace at every percentage above 0. */
+export const POLICY_KEEP_TRACE_ID = '4bf92f3577b34da6a3ffffffffffffff';
+/** The last 14 hex characters are all 0: policy mode drops the trace at every percentage below 100. */
+export const POLICY_DROP_TRACE_ID = '4bf92f3577b34da6a300000000000000';
+
+/** testdata/policy_<name>_vectors.json: threshold, tracestate, regex or decision. */
+export function policyVectors<T>(
+  name: 'threshold' | 'tracestate' | 'regex' | 'decision'
+): T {
+  return JSON.parse(
+    readFileSync(
+      path.resolve(PACKAGE_DIR, `../testdata/policy_${name}_vectors.json`),
+      'utf8'
+    )
+  ) as T;
+}
 
 /** Registers an AsyncLocalStorage context manager for every test in the calling `describe`. */
 export function useContextManager(): void {

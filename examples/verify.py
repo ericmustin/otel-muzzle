@@ -10,6 +10,13 @@ output (one OTLP JSON export batch per line):
   3. ratio      sampled traceparent whose trace id the ratio selects            full
   4. minted     no traceparent; the entry app mints the trace id                lean or full, from the id
 
+With POLICY_FILE set (the apps run in policy mode with the same file, make e2e POLICY=1), a trace is full when
+its randomness, trace-id bytes 9-15, is at or above the policy's rejection threshold, and a fifth request is sent:
+
+  5. rv         a trace id the policy selects, plus tracestate ot=rv:00000000000000    lean
+
+The explicit randomness value replaces the trace id in every service, so the trace is lean.
+
 With ROOTS_DROPPED=1 (the apps run OTEL_TRACES_SAMPLER=parentbased_traceidratio, OTEL_TRACES_SAMPLER_ARG=0),
 scenario 4 must export nothing in any service: otel-muzzle wraps the configured sampler, and its DROP wins.
 
@@ -25,6 +32,7 @@ Environment:
   APP_URLS     comma-separated base URLs whose /health must answer before the run
   SPANS_FILE   collector output, e.g. /out/spans.jsonl
   RATIO        the apps' OTEL_MUZZLE_VERBOSE_RATIO (default 0.1)
+  POLICY_FILE  the apps' OTEL_MUZZLE_POLICY_FILE, when they run in policy mode; RATIO is then unused
   ROOTS_DROPPED 1 when the apps' configured sampler drops new roots (see above)
 
 Usage:
@@ -65,12 +73,47 @@ def ratio_selects(trace_id, ratio):
     return int(trace_id[24:32], 16) < math.floor(ratio * 2.0**32)
 
 
-def trace_id_where(selected, ratio):
-    """A random trace id the ratio does (or does not) select."""
+def trace_id_where(selected, selects):
+    """A random trace id the rule does (or does not) select."""
     while True:
         trace_id = secrets.token_hex(16)
-        if ratio_selects(trace_id, ratio) == selected:
+        if selects(trace_id) == selected:
             return trace_id
+
+
+# --- the policy rule, shared with the packages (testdata/policy_threshold_vectors.json) --------------
+
+MAX_THRESHOLD = 1 << 56
+
+
+def policy_threshold(percentage, precision=4):
+    """The rejection threshold of a span sampling policy: 2**56 - round(percentage / 100 * 2**56), rounded half up
+    to `precision` hexadecimal digits counted after the leading f digits, 14 at most."""
+    probability = percentage / 100
+    if probability <= 0:
+        return MAX_THRESHOLD
+    if probability >= 1:
+        return 0
+    scaled = probability * MAX_THRESHOLD
+    whole = math.floor(scaled)
+    threshold = MAX_THRESHOLD - (whole + (1 if scaled - whole >= 0.5 else 0))
+    shift = 4 * (14 - min(14, precision + (-math.frexp(probability)[1]) // 4))
+    if shift > 0:
+        threshold = ((threshold + (1 << (shift - 1))) >> shift) << shift
+    return threshold
+
+
+def policy_selects(trace_id, threshold):
+    """Trace-id bytes 9-15 (the last 14 hex characters) at or above the rejection threshold."""
+    return int(trace_id[18:32], 16) >= threshold
+
+
+def policy_file_threshold(text):
+    """The threshold of a policy file with one span sampling policy, such as examples/policies/muzzle.json."""
+    (policy,) = json.loads(text)["policies"]
+    sampling = (policy.get("spanSampling") or policy["span_sampling"])["sampling"]
+    precision = sampling.get("samplingPrecision", sampling.get("sampling_precision", 4))
+    return policy_threshold(float(sampling["percentage"]), int(precision))
 
 
 # --- parsing (pure) ---------------------------------------------------------------------------------
@@ -165,14 +208,14 @@ def check_trace(spans, services, expect, external_parent=None):
     return failures
 
 
-def check_header_propagated(spans, services):
-    """Scenario 2: downstream SERVER spans received muzzle=verbose in their tracestate."""
+def check_header_propagated(spans, services, member="muzzle=verbose"):
+    """Scenarios 2 and 5: downstream SERVER spans received the tracestate member."""
     failures = []
     for s in spans:
         if s.kind == "SERVER" and s.service != services[0] and s.service in services:
             members = [m.strip() for m in s.trace_state.split(",")]
-            if "muzzle=verbose" not in members:
-                failures.append(f"{_describe(s)}: traceState {s.trace_state!r} lacks muzzle=verbose")
+            if member not in members:
+                failures.append(f"{_describe(s)}: traceState {s.trace_state!r} lacks {member}")
     return failures
 
 
@@ -208,9 +251,11 @@ class Scenario:
     parent_id: str | None = None
 
 
-def scenarios(ratio, roots_dropped=False):
+def scenarios(selects, any_selected=True, roots_dropped=False, policy=False):
+    """selects(trace_id) is the rule in effect; any_selected is False when it selects no trace id at all."""
+
     def sampled(name, selected, expect, tracestate=None):
-        trace_id, parent_id = trace_id_where(selected, ratio), secrets.token_hex(8)
+        trace_id, parent_id = trace_id_where(selected, selects), secrets.token_hex(8)
         headers = {"traceparent": f"00-{trace_id}-{parent_id}-01"}
         if tracestate:
             headers["tracestate"] = tracestate
@@ -218,12 +263,14 @@ def scenarios(ratio, roots_dropped=False):
 
     out = [sampled("1 quiet trace id", False, "lean"),
            sampled("2 tracestate muzzle=verbose", False, "full", "muzzle=verbose")]
-    if ratio > 0:
-        out.append(sampled("3 trace id the ratio selects", True, "full"))
+    if any_selected:
+        out.append(sampled("3 trace id the rule selects", True, "full"))
     if roots_dropped:
         out.append(Scenario("4 no traceparent, root dropped", {}, "none"))
     else:
         out.append(Scenario("4 no traceparent", {}, None))
+    if policy and any_selected:
+        out.append(sampled("5 tracestate ot=rv:00000000000000", True, "lean", "ot=rv:00000000000000"))
     return out
 
 
@@ -286,7 +333,7 @@ def run_scenario(env, sc):
     failures = []
     if sc.trace_id and trace_id != sc.trace_id:
         failures.append(f"entry reported trace {trace_id}, expected the traceparent's {sc.trace_id}")
-    expect = sc.expect or ("full" if ratio_selects(trace_id, env["ratio"]) else "lean")
+    expect = sc.expect or ("full" if env["selects"](trace_id) else "lean")
     if expect == "none":
         # Longer than every SDK's 5 s batch delay; scenarios 1-3 already showed the pipeline delivers.
         time.sleep(8)
@@ -300,7 +347,7 @@ def run_scenario(env, sc):
     spans = wait_for_trace(env["spans"], trace_id, env["services"])
     failures += check_trace(spans, env["services"], expect, sc.parent_id)
     if "tracestate" in sc.headers:
-        failures += check_header_propagated(spans, env["services"])
+        failures += check_header_propagated(spans, env["services"], sc.headers["tracestate"])
     print(f"trace {trace_id}: {len(spans)} spans, expected {expect}")
     for line in render_tree(spans, sc.parent_id):
         print(f"  {line}")
@@ -314,11 +361,20 @@ def main():
         "path": os.environ.get("ENTRY_PATH", "/chain"),
         "services": [s.strip() for s in os.environ["SERVICES"].split(",") if s.strip()],
         "spans": os.environ["SPANS_FILE"],
-        "ratio": float(os.environ.get("RATIO", "0.1")),
         "roots_dropped": os.environ.get("ROOTS_DROPPED") == "1",
     }
+    policy_file = os.environ.get("POLICY_FILE", "").strip()
+    if policy_file:
+        with open(policy_file, encoding="utf-8") as f:
+            threshold = policy_file_threshold(f.read())
+        env["selects"], any_selected = (lambda trace_id: policy_selects(trace_id, threshold)), threshold < MAX_THRESHOLD
+        print(f"policy mode: {policy_file}, rejection threshold {threshold:014x}")
+    else:
+        ratio = float(os.environ.get("RATIO", "0.1"))
+        env["selects"], any_selected = (lambda trace_id: ratio_selects(trace_id, ratio)), ratio > 0
     wait_for_apps([u.strip() for u in os.environ.get("APP_URLS", env["entry"]).split(",") if u.strip()])
-    results = [(sc, *run_scenario(env, sc)) for sc in scenarios(env["ratio"], env["roots_dropped"])]
+    plan = scenarios(env["selects"], any_selected, env["roots_dropped"], bool(policy_file))
+    results = [(sc, *run_scenario(env, sc)) for sc in plan]
 
     print("\n=== summary ===")
     for sc, failures, trace_id, spans in results:
@@ -405,6 +461,31 @@ def selftest():
             wrong = [c for c in json.load(f)["cases"] if ratio_selects(c["trace_id"], c["ratio"]) != c["verbose"]]
         ok &= not wrong
         print(f"{'ok  ' if not wrong else 'FAIL'} ratio rule matches testdata/ratio_vectors.json {wrong[:3] or ''}")
+    got = check_header_propagated(spans_of(_chain(verbose=True), _T), services, "ot=rv:00000000000000")
+    ok &= len(got) == 2
+    print(f"{'ok  ' if len(got) == 2 else 'FAIL'} another tracestate member is looked for by name: {len(got)} failures (want 2)")
+
+    here = os.path.dirname(os.path.abspath(__file__))
+    vectors = os.path.join(here, "..", "testdata", "policy_threshold_vectors.json")
+    if os.path.exists(vectors):
+        with open(vectors, encoding="utf-8") as f:
+            wrong = [c for c in json.load(f)["cases"]
+                     if f"{policy_threshold(c['percentage'], c['precision']):014x}" != c["threshold"]]
+        ok &= not wrong
+        print(f"{'ok  ' if not wrong else 'FAIL'} policy threshold matches testdata/policy_threshold_vectors.json {wrong[:3] or ''}")
+    example = os.path.join(here, "policies", "muzzle.json")
+    if os.path.exists(example):
+        with open(example, encoding="utf-8") as f:
+            threshold = policy_file_threshold(f.read())
+        passed = (threshold == 0xE6660000000000 and policy_selects("4bf92f3577b34da6a3e6660000000000", threshold)
+                  and not policy_selects("4bf92f3577b34da6a3e665ffffffffff", threshold))
+        ok &= passed
+        print(f"{'ok  ' if passed else 'FAIL'} the example policy selects trace ids at or above e6660000000000")
+    names = [sc.name[0] for sc in scenarios(lambda trace_id: policy_selects(trace_id, 0xE666 << 40), policy=True)]
+    plain = [sc.name[0] for sc in scenarios(lambda trace_id: ratio_selects(trace_id, 0.1))]
+    passed = names == ["1", "2", "3", "4", "5"] and plain == ["1", "2", "3", "4"]
+    ok &= passed
+    print(f"{'ok  ' if passed else 'FAIL'} policy mode adds the rv scenario: {names} and {plain}")
     print("\nselftest " + ("passed" if ok else "FAILED"))
     return 0 if ok else 1
 
