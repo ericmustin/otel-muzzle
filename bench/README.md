@@ -21,8 +21,9 @@ Everything runs in local Docker. Nothing is pushed to a registry or published an
 `OTLP_FORWARD_ENDPOINT` and `OTLP_FORWARD_AUTHORIZATION`, the collector also forwards the spans to that OTLP
 endpoint (see [Forwarding](#forwarding)). `LOCAL_ONLY=1` turns that off.
 
-The latest results are in [RESULTS.md](RESULTS.md). The same comparison on a full application, GitLab CE with its
-own OpenTelemetry tracing, is in [gitlab/](gitlab/README.md).
+The latest results are in [RESULTS.md](RESULTS.md), and every scheduled run is on the
+[dashboard](https://ericmustin.github.io/otel-muzzle/) (see [Results over time](#results-over-time)). The same
+comparison on a full application, GitLab CE with its own OpenTelemetry tracing, is in [gitlab/](gitlab/README.md).
 
 ## Run it
 
@@ -43,6 +44,7 @@ Each run writes `bench/out/<run-id>/` (git-ignored).
 - It contains `results.md`, `results.csv` and `results.json`.
 - For each variant it also keeps the raw collector output, the k6 summaries and the container logs.
 - `RESULTS.md` is overwritten with the latest report.
+- The run fails, with the report still written, when an integrity check fails.
 
 ## What runs
 
@@ -145,6 +147,52 @@ set up the way the demo's is:
 Byte reductions differ from span reductions. The server span, which every variant keeps, carries most of the
 attributes. So dropping a small INTERNAL span saves less than its share of the span count, and dropping an
 attribute-heavy one saves more.
+
+## Results over time
+
+The `bench` workflow (`.github/workflows/bench.yml`) runs both benchmarks on GitHub-hosted runners:
+
+| Benchmark | Schedule (UTC) | Variants |
+|---|---|---|
+| OpenTelemetry Demo | nightly, 03:17 | `baseline`, `muzzle-0`, `muzzle-10`, `muzzle-100`, `header-10` |
+| GitLab CE | Sundays, 05:17 | `baseline`, `muzzle-0`, `muzzle-10`, `header-10`, `baseline-2` |
+
+Both also run on pull requests that change `bench/`. `gh workflow run bench` starts the OpenTelemetry Demo
+benchmark by hand, and `gh workflow run bench -f gitlab=true` the GitLab one.
+
+Each run:
+
+1. **Reports.** It writes `results.md` to the job summary and uploads the run directory, without the raw collector
+   output, as an artifact.
+2. **Converts.** `history.py` turns `results.json` into the input of
+   [github-action-benchmark](https://github.com/benchmark-action/github-action-benchmark), the action
+   OpenTelemetry's JavaScript and Python repositories use for their benchmark history. Each entry is one
+   measure of one variant, such as `email/muzzle-10/trace_bytes`. Every measure is spans or bytes per request or per
+   trace, so smaller is better. `history.py` refuses a run whose checks failed, so the history holds only runs that
+   passed them.
+3. **Records.** On `main` only, the action appends the numbers and the commit to `benchmarks/data.js` on the
+   `benchmark-data` branch. When a number for a new commit is more than 20% above the previous commit's, it
+   comments on the commit. Runs on the same commit add points to the history but are not compared with each other.
+
+The `pages` workflow then publishes `site/index.html` with that `data.js` to GitHub Pages as the dashboard:
+
+- one chart per service and measure over time, with a line per variant;
+- the change against stock, computed per run;
+- the latest run as a table.
+
+A link can select the view, as `?<measure>&change#<benchmark>` does in `?trace_bytes&change#email`.
+
+The measures are counts and encoded sizes, so the runner's speed does not move them. They change when otel-muzzle,
+the pinned images or the load change. The ratio variants also vary by about 2% between runs, because the verbose
+traces are picked at random by trace id.
+
+To set this up in a fork, create the data branch and switch GitHub Pages to deploy from Actions, once:
+
+```sh
+git switch --orphan benchmark-data && git commit --allow-empty -m "Start the benchmark data" \
+  && git push origin benchmark-data && git switch -
+gh api -X POST 'repos/{owner}/{repo}/pages' -f build_type=workflow
+```
 
 ## Forwarding
 

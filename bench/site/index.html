@@ -1,0 +1,181 @@
+<!doctype html>
+<!-- SPDX-License-Identifier: Apache-2.0 -->
+<!-- The benchmark dashboard. The pages workflow publishes it next to data.js, which
+     github-action-benchmark writes on the benchmark-data branch. URL: ?<measure>&change#<benchmark> -->
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>otel-muzzle benchmarks</title>
+<style>
+  :root { color-scheme: light; --fg: #1f2328; --muted: #59636e; --bg: #fff; --line: #d1d9e0; --accent: #0969da; }
+  @media (prefers-color-scheme: dark) {
+    :root { color-scheme: dark; --fg: #f0f6fc; --muted: #9198a1; --bg: #0d1117; --line: #3d444d; --accent: #4493f8; }
+  }
+  body { margin: 0 auto; max-width: 64rem; padding: 1.5rem 1rem; font: 15px/1.5 system-ui, sans-serif;
+         color: var(--fg); background: var(--bg); }
+  a { color: var(--accent); }
+  p, footer { color: var(--muted); }
+  footer { margin-top: 2rem; }
+  nav, form { display: flex; flex-wrap: wrap; gap: .25rem 1rem; align-items: baseline; margin: .75rem 0; }
+  nav b { color: var(--muted); font-weight: 600; }
+  nav a[aria-current] { color: var(--fg); font-weight: 600; text-decoration: none; }
+  .chart { position: relative; height: 24rem; }
+  .table { overflow-x: auto; }
+  table { border-collapse: collapse; width: 100%; font-variant-numeric: tabular-nums; }
+  th, td { padding: .35rem .6rem; border-bottom: 1px solid var(--line); text-align: right; white-space: nowrap; }
+  th:first-child, td:first-child { text-align: left; }
+</style>
+</head>
+<body>
+<h1>otel-muzzle benchmarks</h1>
+<p>Trace volume and size with otel-muzzle against the stock instrumentation of the same applications, under the
+  same load, from every scheduled run. <a id="readme">How it is measured</a>.</p>
+<main id="app"><p>No results yet.</p></main>
+<footer>The numbers for every run are in <a href="data.js">data.js</a>, written by
+  <a href="https://github.com/benchmark-action/github-action-benchmark">github-action-benchmark</a>.</footer>
+<script src="data.js"></script>
+<script src="https://cdnjs.cloudflare.com/ajax/libs/Chart.js/4.5.1/chart.umd.min.js"
+        integrity="sha512-WoViKhKD4qI2WruSZqv9+kvM4WfFhUMQCLN4QlDTt5aU56fLQy2gYoxWIqlEnXqJy/+Ac5q/hk1oWfqnMDhwMA=="
+        crossorigin="anonymous" referrerpolicy="no-referrer"></script>
+<script>
+'use strict';
+const BENCHMARKS = { email: 'email (Ruby)', payment: 'payment (Node.js)', recommendation: 'recommendation (Python)',
+                     gitlab: 'gitlab (Ruby)' };
+const MEASURES = { spans_per_request: ['Spans per request', 2], spans_per_trace: ['Spans per trace', 2],
+                   trace_bytes: ['Trace bytes', 0], otlp_bytes_per_request: ['OTLP bytes per request', 0] };
+const VARIANTS = { baseline: ['Stock', '#6e7781'], 'baseline-2': ['Stock, second run', '#afb8c1'],
+                   'muzzle-0': ['otel-muzzle, ratio 0%', '#1a7f37'],
+                   'muzzle-10': ['otel-muzzle, ratio 10% (default)', '#0969da'],
+                   'muzzle-100': ['otel-muzzle, ratio 100%', '#bc4c00'],
+                   'header-10': ['otel-muzzle, ratio 0%, 10% of requests force verbose', '#8250df'] };
+
+// Entry names are <benchmark>/<variant>/<measure> (bench/history.py). runs[benchmark] lists
+// {date, commit, values: {variant: {measure: value}}}, oldest first; suites[suite] lists its benchmarks.
+const data = window.BENCHMARK_DATA;
+const runs = {}, suites = {};
+for (const [suite, entries] of Object.entries(data?.entries ?? {})) {
+  for (const { date, commit, benches } of entries) {
+    const values = {};
+    for (const { name, value } of benches) {
+      const [benchmark, variant, measure] = name.split('/');
+      ((values[benchmark] ??= {})[variant] ??= {})[measure] = value;
+    }
+    for (const [benchmark, v] of Object.entries(values)) {
+      if (!runs[benchmark]) (suites[suite] ??= []).push(benchmark);
+      (runs[benchmark] ??= []).push({ date, commit, values: v });
+    }
+  }
+}
+
+function build(tag, props = {}, children = []) {
+  const node = Object.assign(document.createElement(tag), props);
+  node.append(...children);
+  return node;
+}
+const number = (value, digits) => value.toLocaleString('en', { maximumFractionDigits: digits,
+                                                                minimumFractionDigits: digits });
+const percent = (value, base) => base ? `${value >= base ? '+' : ''}${number((value / base - 1) * 100, 1)}%` : '';
+const day = (ms) => new Date(ms).toISOString().slice(0, 10);
+
+function state() {
+  const params = new URLSearchParams(location.search);
+  const benchmark = runs[location.hash.slice(1)] ? location.hash.slice(1) : Object.keys(runs)[0];
+  const latest = runs[benchmark].at(-1).values;
+  const variants = [...new Set([...Object.keys(VARIANTS), ...Object.keys(latest)])].filter((v) => latest[v]);
+  const measures = Object.keys(MEASURES).filter((m) => m in latest[variants[0]]);
+  const measure = measures.find((m) => params.has(m)) ?? measures[0];
+  return { benchmark, variants, measures, measure, change: params.has('change') };
+}
+
+function go(s) {
+  history.replaceState(null, '', `?${s.measure}${s.change ? '&change' : ''}#${s.benchmark}`);
+  render();
+}
+
+let chart;
+function render() {
+  const s = state();
+  const list = runs[s.benchmark];
+  const latest = list.at(-1);
+
+  const nav = build('nav');
+  for (const [suite, benchmarks] of Object.entries(suites)) {
+    nav.append(build('b', { textContent: suite }));
+    for (const b of benchmarks) {
+      const link = build('a', { href: `#${b}`, textContent: BENCHMARKS[b] ?? b });
+      if (b === s.benchmark) link.setAttribute('aria-current', 'page');
+      link.onclick = (event) => { event.preventDefault(); go({ ...s, benchmark: b }); };
+      nav.append(link);
+    }
+  }
+
+  const form = build('form');
+  for (const m of s.measures) {
+    const input = build('input', { type: 'radio', name: 'measure', checked: m === s.measure });
+    input.onchange = () => go({ ...s, measure: m });
+    form.append(build('label', {}, [input, ` ${MEASURES[m][0]}`]));
+  }
+  const change = build('input', { type: 'checkbox', checked: s.change });
+  change.onchange = () => go({ ...s, change: change.checked });
+  form.append(build('label', {}, [change, ' Change against stock']));
+
+  const canvas = build('canvas');
+  const table = build('table', {}, [build('tr', {}, [build('th', { textContent: 'Variant' }),
+    ...s.measures.map((m) => build('th', { textContent: MEASURES[m][0] }))])]);
+  const base = latest.values.baseline ?? {};
+  for (const v of s.variants) {
+    table.append(build('tr', {}, [build('td', { textContent: VARIANTS[v]?.[0] ?? v }),
+      ...s.measures.map((m) => build('td', { textContent: `${number(latest.values[v][m], MEASURES[m][1])} `
+        + (v === 'baseline' ? '' : `(${percent(latest.values[v][m], base[m])})`) }))]));
+  }
+  const commit = build('a', { href: latest.commit.url, textContent: latest.commit.id.slice(0, 7) });
+  document.getElementById('app').replaceChildren(nav, form, build('div', { className: 'chart' }, [canvas]),
+    build('h2', { textContent: 'Latest run' }),
+    build('p', {}, [`${day(latest.date)}, commit `, commit, '. Change against stock in parentheses.']),
+    build('div', { className: 'table' }, [table]));
+
+  const [label, digits] = MEASURES[s.measure];
+  const point = (run, v) => {
+    const value = run.values[v]?.[s.measure], stock = run.values.baseline?.[s.measure];
+    if (value === undefined) return null;
+    return s.change ? (stock ? (value / stock - 1) * 100 : null) : value;
+  };
+  const style = getComputedStyle(document.documentElement);
+  Chart.defaults.color = style.getPropertyValue('--muted');
+  Chart.defaults.borderColor = style.getPropertyValue('--line');
+  chart?.destroy();
+  chart = new Chart(canvas, {
+    type: 'line',
+    data: {
+      labels: list.map((run) => day(run.date)),
+      datasets: s.variants.filter((v) => !(s.change && v === 'baseline')).map((v) => ({
+        label: VARIANTS[v]?.[0] ?? v, data: list.map((run) => point(run, v)), spanGaps: true,
+        borderColor: VARIANTS[v]?.[1], backgroundColor: VARIANTS[v]?.[1] })),
+    },
+    options: {
+      animation: false,
+      maintainAspectRatio: false,
+      interaction: { mode: 'index', intersect: false },
+      scales: { y: { beginAtZero: !s.change, title: { display: true,
+        text: s.change ? `${label}, % change against stock` : label } } },
+      plugins: { tooltip: { callbacks: {
+        title: ([item]) => {
+          const { date, commit } = list[item.dataIndex];
+          return `${day(date)} ${commit.id.slice(0, 7)} ${commit.message.split('\n')[0]}`;
+        },
+        label: (item) => `${item.dataset.label}: ${s.change ? `${number(item.raw, 1)}%` : number(item.raw, digits)}`,
+      } } },
+      onClick: (event, [item]) => item && window.open(list[item.index].commit.url, '_blank', 'noopener'),
+    },
+  });
+}
+
+if (data) document.getElementById('readme').href = `${data.repoUrl}/blob/main/bench/README.md`;
+if (Object.keys(runs).length) {
+  addEventListener('hashchange', render);
+  render();
+}
+</script>
+</body>
+</html>
