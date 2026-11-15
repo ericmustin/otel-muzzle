@@ -38,6 +38,17 @@ log() { printf '\n[bench-gitlab %s] %s\n' "$(date +%H:%M:%S)" "$*"; }
 # k6_run SCRIPT [docker compose run options]
 k6_run() { local script="$1"; shift; docker compose --profile load run --rm "$@" k6 run --quiet "/bench/${script}"; }
 
+# The readiness check can pass before every Puma worker serves: wait until the API answers for the seeded project.
+api_ready() {
+  for _ in $(seq 60); do
+    docker compose exec -T gitlab curl -fs -o /dev/null -H "PRIVATE-TOKEN: ${BENCH_TOKEN}" \
+      "http://localhost/api/v4/projects/root%2Fsinatra" && return 0
+    sleep 5
+  done
+  log "GitLab's API did not answer within 5 minutes"
+  return 1
+}
+
 # name -> "label|image|ratio|header_ratio"
 variant_def() {
   case "$1" in
@@ -76,6 +87,7 @@ for name in $VARIANTS; do
 
   log "variant ${name}: ${label}"
   BENCH_PHASE=warmup docker compose up -d --wait --force-recreate otel-collector gitlab
+  api_ready
   k6_run k6.js -e RATE="$WARMUP_RATE" -e DURATION="$WARMUP_DURATION" -e HEADER_RATIO="$header_ratio" \
     -e SUMMARY_PATH="/out/${name}/k6-warmup.json" >/dev/null
   sleep "$FLUSH_WAIT"   # let warmup spans leave the SDK queues before measuring
